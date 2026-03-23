@@ -510,6 +510,33 @@ void InferSchemaFromDocuments(mongocxx::collection &collection, int64_t sample_s
 	}
 }
 
+namespace {
+
+void CollectObjectIdFieldsRecursive(const bsoncxx::document::view &doc, const std::string &mongo_prefix,
+                                    std::unordered_set<std::string> &objectid_columns) {
+	for (const auto &elem : doc) {
+		std::string field_name(elem.key().data(), elem.key().length());
+		std::string mongo_path = mongo_prefix.empty() ? field_name : mongo_prefix + "." + field_name;
+
+		if (elem.type() == bsoncxx::type::k_oid) {
+			objectid_columns.insert(mongo_path);
+		} else if (elem.type() == bsoncxx::type::k_document) {
+			CollectObjectIdFieldsRecursive(elem.get_document().value, mongo_path, objectid_columns);
+		}
+	}
+}
+
+} // namespace
+
+void DetectObjectIdColumns(mongocxx::collection &collection, std::unordered_set<std::string> &objectid_columns) {
+	mongocxx::options::find opts;
+	opts.limit(1);
+	auto cursor = collection.find({}, opts);
+	for (const auto &doc : cursor) {
+		CollectObjectIdFieldsRecursive(doc, "", objectid_columns);
+	}
+}
+
 // Validation-only function that checks schema compatibility without writing to output
 // Used for COUNT(*) queries where we need to validate but not materialize data
 bool ValidateDocumentSchema(const bsoncxx::document::view &doc, const std::vector<string> &column_names,

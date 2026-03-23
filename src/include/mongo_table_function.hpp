@@ -8,6 +8,7 @@
 #include <bsoncxx/json.hpp>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace duckdb {
@@ -48,6 +49,10 @@ struct MongoScanData : public TableFunctionData {
 	// Mapping from flattened column name to original MongoDB path (for filter pushdown)
 	// e.g., "address_city" -> "address.city", "l_returnflag" -> "l_returnflag"
 	unordered_map<string, string> column_name_to_mongo_path;
+
+	// Columns whose BSON type is k_oid (actual ObjectId), keyed by MongoDB path.
+	// Used by filter pushdown to decide whether to send bsoncxx::oid vs plain string.
+	std::unordered_set<std::string> objectid_columns;
 
 	// Complex filter pushdown: MongoDB $expr queries for complex expressions
 	bsoncxx::document::value complex_filter_expr;
@@ -123,6 +128,9 @@ bool ValidateDocumentSchema(const bsoncxx::document::view &doc, const std::vecto
                             const std::vector<LogicalType> &column_types,
                             const std::unordered_map<std::string, std::string> &column_name_to_mongo_path,
                             SchemaMode schema_mode);
+
+// Probe one document to discover which fields have BSON ObjectId type
+void DetectObjectIdColumns(mongocxx::collection &collection, std::unordered_set<std::string> &objectid_columns);
 
 // Projection pushdown function
 bsoncxx::document::value BuildMongoProjection(const vector<column_t> &column_ids,

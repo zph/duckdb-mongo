@@ -141,6 +141,10 @@ unique_ptr<FunctionData> MongoScanBind(ClientContext &context, TableFunctionBind
 		                         result->column_name_to_mongo_path);
 	}
 
+	// Probe one document to discover which fields are actual BSON ObjectIds.
+	// This avoids the heuristic of guessing by column name during filter pushdown.
+	DetectObjectIdColumns(collection, result->objectid_columns);
+
 	// Set return types and names
 	return_types = result->column_types;
 	names = result->column_names;
@@ -368,7 +372,7 @@ unique_ptr<LocalTableFunctionState> MongoScanInitLocal(ExecutionContext &context
 		if (MongoHasFilters(*remapped_filters)) {
 			// Convert DuckDB filters to MongoDB query using remapped indices
 			auto mongo_filter = ConvertFiltersToMongoQuery(remapped_filters.get(), data.column_names, data.column_types,
-			                                               data.column_name_to_mongo_path);
+			                                               data.column_name_to_mongo_path, data.objectid_columns);
 
 			// Check if filters were successfully pushed down (non-empty MongoDB query)
 			// If filters are pushed down to MongoDB, MongoDB filters server-side and we don't need filter columns

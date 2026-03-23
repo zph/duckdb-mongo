@@ -19,6 +19,7 @@
 #include <bsoncxx/document/value.hpp>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace duckdb {
@@ -62,6 +63,7 @@ inline void MongoSetFilter(TableFilterSet &tfs, idx_t col_idx, unique_ptr<TableF
 bsoncxx::document::value
 ConvertFiltersToMongoQuery(optional_ptr<TableFilterSet> filters, const std::vector<std::string> &column_names,
                            const std::vector<LogicalType> &column_types,
-                           const std::unordered_map<std::string, std::string> &column_name_to_mongo_path);
+                           const std::unordered_map<std::string, std::string> &column_name_to_mongo_path,
+                           const std::unordered_set<std::string> &objectid_columns);
 
 } // namespace duckdb

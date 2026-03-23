@@ -129,7 +129,8 @@ static bsoncxx::document::value BuildMatchFromExistingFilters(const LogicalGet &
 		// but LogicalGet::table_filters is const here. Copy the filter set for translation.
 		auto filters_copy = get.table_filters.Copy();
 		auto simple = ConvertFiltersToMongoQuery(optional_ptr<TableFilterSet>(filters_copy.get()), data.column_names,
-		                                         data.column_types, data.column_name_to_mongo_path);
+		                                         data.column_types, data.column_name_to_mongo_path,
+		                                         data.objectid_columns);
 		if (!DocIsEmpty(simple.view())) {
 			conjuncts.push_back(std::move(simple));
 		}

@@ -19,7 +19,6 @@
 namespace duckdb {
 namespace {
 
-// Check if a string is a valid MongoDB ObjectID hex string (24 hex characters)
 static bool IsValidObjectIdHex(const string &str) {
 	if (str.size() != 24) {
 		return false;
@@ -32,26 +31,14 @@ static bool IsValidObjectIdHex(const string &str) {
 	return true;
 }
 
-// Check if a column name represents an ObjectID field
-// Returns true for "_id" and fields ending with "_id" (common foreign key pattern)
-static bool IsObjectIdColumn(const string &column_name) {
-	if (column_name == "_id") {
-		return true;
-	}
-	// Check for nested _id (e.g., "customer._id")
-	if (column_name.size() > 4 && column_name.substr(column_name.size() - 4) == "._id") {
-		return true;
-	}
-	// Check for foreign key pattern (e.g., "customer_id", "user_id")
-	if (column_name.size() > 3 && column_name.substr(column_name.size() - 3) == "_id") {
-		return true;
-	}
-	return false;
+static bool IsActualObjectIdColumn(const string &column_name, const unordered_set<string> &objectid_columns) {
+	return objectid_columns.count(column_name) > 0;
 }
 
 // Helper function to append a DuckDB Value to a MongoDB basic array builder
 static void AppendValueToArray(bsoncxx::builder::basic::array &array_builder, const Value &value,
-                               const LogicalType &type, const string &column_name = "") {
+                               const LogicalType &type, const string &column_name,
+                               const unordered_set<string> &objectid_columns) {
 	if (value.IsNull()) {
 		array_builder.append(bsoncxx::types::b_null {});
 		return;
@@ -60,8 +47,7 @@ static void AppendValueToArray(bsoncxx::builder::basic::array &array_builder, co
 	switch (type.id()) {
 	case LogicalTypeId::VARCHAR: {
 		auto str_val = value.GetValue<string>();
-		// Convert to ObjectID if this is an ObjectID column and the value is a valid hex string
-		if (IsObjectIdColumn(column_name) && IsValidObjectIdHex(str_val)) {
+		if (IsActualObjectIdColumn(column_name, objectid_columns) && IsValidObjectIdHex(str_val)) {
 			array_builder.append(bsoncxx::oid(str_val));
 		} else {
 			array_builder.append(str_val);
@@ -110,10 +96,9 @@ static void AppendValueToArray(bsoncxx::builder::basic::array &array_builder, co
 	}
 }
 
-// Helper function to append a DuckDB Value to a MongoDB basic document builder
-// column_name is the original column name (used to detect ObjectID fields)
 static void AppendValueToDocument(bsoncxx::builder::basic::document &doc_builder, const string &key, const Value &value,
-                                  const LogicalType &type, const string &column_name = "") {
+                                  const LogicalType &type, const string &column_name,
+                                  const unordered_set<string> &objectid_columns) {
 	if (value.IsNull()) {
 		doc_builder.append(bsoncxx::builder::basic::kvp(key, bsoncxx::types::b_null {}));
 		return;
@@ -125,8 +110,7 @@ static void AppendValueToDocument(bsoncxx::builder::basic::document &doc_builder
 	switch (type.id()) {
 	case LogicalTypeId::VARCHAR: {
 		auto str_val = value.GetValue<string>();
-		// Convert to ObjectID if this is an ObjectID column and the value is a valid hex string
-		if (IsObjectIdColumn(col_for_oid_check) && IsValidObjectIdHex(str_val)) {
+		if (IsActualObjectIdColumn(col_for_oid_check, objectid_columns) && IsValidObjectIdHex(str_val)) {
 			doc_builder.append(bsoncxx::builder::basic::kvp(key, bsoncxx::oid(str_val)));
 		} else {
 			doc_builder.append(bsoncxx::builder::basic::kvp(key, str_val));
@@ -177,9 +161,9 @@ static void AppendValueToDocument(bsoncxx::builder::basic::document &doc_builder
 	}
 }
 
-// Convert a single filter to MongoDB query document
 static bsoncxx::document::value ConvertSingleFilterToMongo(const TableFilter &filter, const string &column_name,
-                                                           const LogicalType &column_type) {
+                                                           const LogicalType &column_type,
+                                                           const unordered_set<string> &objectid_columns) {
 	bsoncxx::builder::basic::document doc;
 
 	switch (filter.filter_type) {
@@ -189,7 +173,7 @@ static bsoncxx::document::value ConvertSingleFilterToMongo(const TableFilter &fi
 
 		switch (constant_filter.comparison_type) {
 		case ExpressionType::COMPARE_EQUAL:
-			AppendValueToDocument(doc, column_name, constant_filter.constant, column_type, column_name);
+			AppendValueToDocument(doc, column_name, constant_filter.constant, column_type, column_name, objectid_columns);
 			break;
 		case ExpressionType::COMPARE_NOTEQUAL:
 			mongo_op = "$ne";
@@ -213,7 +197,8 @@ static bsoncxx::document::value ConvertSingleFilterToMongo(const TableFilter &fi
 
 		if (!mongo_op.empty()) {
 			bsoncxx::builder::basic::document op_doc;
-			AppendValueToDocument(op_doc, mongo_op, constant_filter.constant, column_type, column_name);
+			AppendValueToDocument(op_doc, mongo_op, constant_filter.constant, column_type, column_name,
+			                     objectid_columns);
 			doc.append(bsoncxx::builder::basic::kvp(column_name, op_doc.extract()));
 		}
 		break;
@@ -225,7 +210,7 @@ static bsoncxx::document::value ConvertSingleFilterToMongo(const TableFilter &fi
 		}
 		bsoncxx::builder::basic::array in_array;
 		for (const auto &val : in_filter.values) {
-			AppendValueToArray(in_array, val, column_type, column_name);
+			AppendValueToArray(in_array, val, column_type, column_name, objectid_columns);
 		}
 		bsoncxx::builder::basic::document in_doc;
 		in_doc.append(bsoncxx::builder::basic::kvp("$in", in_array.extract()));
@@ -247,7 +232,7 @@ static bsoncxx::document::value ConvertSingleFilterToMongo(const TableFilter &fi
 		const auto &conj_filter = static_cast<const ConjunctionFilter &>(filter);
 		bsoncxx::builder::basic::document merged_doc;
 		for (const auto &child_filter : conj_filter.child_filters) {
-			auto child_doc = ConvertSingleFilterToMongo(*child_filter, column_name, column_type);
+			auto child_doc = ConvertSingleFilterToMongo(*child_filter, column_name, column_type, objectid_columns);
 			// Extract conditions from child_doc and merge
 			for (auto it = child_doc.view().begin(); it != child_doc.view().end(); ++it) {
 				if (it->key() == column_name && it->type() == bsoncxx::type::k_document) {
@@ -275,13 +260,13 @@ static bsoncxx::document::value ConvertSingleFilterToMongo(const TableFilter &fi
 				const auto &cf = child_filter->Cast<ConstantFilter>();
 				if (cf.comparison_type == ExpressionType::COMPARE_EQUAL) {
 					bsoncxx::builder::basic::document or_doc;
-					AppendValueToDocument(or_doc, column_name, cf.constant, column_type, column_name);
+					AppendValueToDocument(or_doc, column_name, cf.constant, column_type, column_name, objectid_columns);
 					or_array.append(or_doc.extract());
 					continue;
 				}
 			}
 
-			auto child_doc = ConvertSingleFilterToMongo(*child_filter, column_name, column_type);
+			auto child_doc = ConvertSingleFilterToMongo(*child_filter, column_name, column_type, objectid_columns);
 			if (!child_doc.view().empty()) {
 				or_array.append(child_doc.view());
 			}
@@ -297,7 +282,7 @@ static bsoncxx::document::value ConvertSingleFilterToMongo(const TableFilter &fi
 		const auto &struct_filter = filter.Cast<StructFilter>();
 		if (struct_filter.child_filter) {
 			string nested_path = column_name + "." + struct_filter.child_name;
-			return ConvertSingleFilterToMongo(*struct_filter.child_filter, nested_path, column_type);
+			return ConvertSingleFilterToMongo(*struct_filter.child_filter, nested_path, column_type, objectid_columns);
 		}
 		break;
 	}
@@ -305,7 +290,7 @@ static bsoncxx::document::value ConvertSingleFilterToMongo(const TableFilter &fi
 		// OptionalFilter wraps another filter (often IN filters from semi-join pushdown)
 		const auto &opt_filter = filter.Cast<OptionalFilter>();
 		if (opt_filter.child_filter) {
-			return ConvertSingleFilterToMongo(*opt_filter.child_filter, column_name, column_type);
+			return ConvertSingleFilterToMongo(*opt_filter.child_filter, column_name, column_type, objectid_columns);
 		}
 		break;
 	}
@@ -316,7 +301,8 @@ static bsoncxx::document::value ConvertSingleFilterToMongo(const TableFilter &fi
 			break;
 		}
 		if (dyn_filter.filter_data->filter) {
-			return ConvertSingleFilterToMongo(*dyn_filter.filter_data->filter, column_name, column_type);
+			return ConvertSingleFilterToMongo(*dyn_filter.filter_data->filter, column_name, column_type,
+			                                 objectid_columns);
 		}
 		break;
 	}
@@ -332,7 +318,8 @@ static bsoncxx::document::value ConvertSingleFilterToMongo(const TableFilter &fi
 bsoncxx::document::value
 ConvertFiltersToMongoQuery(optional_ptr<TableFilterSet> filters, const std::vector<string> &column_names,
                            const std::vector<LogicalType> &column_types,
-                           const std::unordered_map<string, string> &column_name_to_mongo_path) {
+                           const std::unordered_map<string, string> &column_name_to_mongo_path,
+                           const std::unordered_set<string> &objectid_columns) {
 	if (!filters || !MongoHasFilters(*filters)) {
 		return bsoncxx::builder::basic::document {}.extract();
 	}
@@ -357,7 +344,7 @@ ConvertFiltersToMongoQuery(optional_ptr<TableFilterSet> filters, const std::vect
 			mongo_column_name = path_it->second;
 		}
 
-		auto filter_doc = ConvertSingleFilterToMongo(filter_ref, mongo_column_name, column_type);
+		auto filter_doc = ConvertSingleFilterToMongo(filter_ref, mongo_column_name, column_type, objectid_columns);
 
 		// Skip empty filters
 		if (filter_doc.view().empty()) {
