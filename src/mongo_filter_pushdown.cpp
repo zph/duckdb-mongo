@@ -173,7 +173,8 @@ static bsoncxx::document::value ConvertSingleFilterToMongo(const TableFilter &fi
 
 		switch (constant_filter.comparison_type) {
 		case ExpressionType::COMPARE_EQUAL:
-			AppendValueToDocument(doc, column_name, constant_filter.constant, column_type, column_name, objectid_columns);
+			AppendValueToDocument(doc, column_name, constant_filter.constant, column_type, column_name,
+			                      objectid_columns);
 			break;
 		case ExpressionType::COMPARE_NOTEQUAL:
 			mongo_op = "$ne";
@@ -198,7 +199,7 @@ static bsoncxx::document::value ConvertSingleFilterToMongo(const TableFilter &fi
 		if (!mongo_op.empty()) {
 			bsoncxx::builder::basic::document op_doc;
 			AppendValueToDocument(op_doc, mongo_op, constant_filter.constant, column_type, column_name,
-			                     objectid_columns);
+			                      objectid_columns);
 			doc.append(bsoncxx::builder::basic::kvp(column_name, op_doc.extract()));
 		}
 		break;
@@ -302,7 +303,7 @@ static bsoncxx::document::value ConvertSingleFilterToMongo(const TableFilter &fi
 		}
 		if (dyn_filter.filter_data->filter) {
 			return ConvertSingleFilterToMongo(*dyn_filter.filter_data->filter, column_name, column_type,
-			                                 objectid_columns);
+			                                  objectid_columns);
 		}
 		break;
 	}
@@ -315,11 +316,11 @@ static bsoncxx::document::value ConvertSingleFilterToMongo(const TableFilter &fi
 
 } // namespace
 
-bsoncxx::document::value
-ConvertFiltersToMongoQuery(optional_ptr<TableFilterSet> filters, const std::vector<string> &column_names,
-                           const std::vector<LogicalType> &column_types,
-                           const std::unordered_map<string, string> &column_name_to_mongo_path,
-                           const std::unordered_set<string> &objectid_columns) {
+bsoncxx::document::value ConvertFiltersToMongoQuery(optional_ptr<TableFilterSet> filters,
+                                                    const std::vector<string> &column_names,
+                                                    const std::vector<LogicalType> &column_types,
+                                                    const std::unordered_map<string, string> &column_name_to_mongo_path,
+                                                    const std::unordered_set<string> &objectid_columns) {
 	if (!filters || !MongoHasFilters(*filters)) {
 		return bsoncxx::builder::basic::document {}.extract();
 	}
