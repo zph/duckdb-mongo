@@ -2,16 +2,24 @@
 # Script to generate TPC-H data and load it into MongoDB
 # Similar to create-postgres-tables.sh but adapted for MongoDB
 
-set -e
+set -eo pipefail
 
-DUCKDB_PATH=duckdb
+DUCKDB_PATH=""
 if test -f build/release/duckdb; then
   DUCKDB_PATH=./build/release/duckdb
 elif test -f build/reldebug/duckdb; then
   DUCKDB_PATH=./build/reldebug/duckdb
 elif test -f build/debug/duckdb; then
   DUCKDB_PATH=./build/debug/duckdb
+elif command -v duckdb &>/dev/null; then
+  DUCKDB_PATH=duckdb
+else
+  echo "Error: DuckDB binary not found."
+  echo "Build the project first: make release"
+  exit 1
 fi
+
+echo "Using DuckDB: $DUCKDB_PATH"
 
 MONGO_HOST=${MONGO_HOST:-localhost}
 MONGO_PORT=${MONGO_PORT:-27017}
@@ -25,29 +33,33 @@ echo "=== Generating TPC-H data (scale factor: $SCALE_FACTOR) ==="
 TEMP_DB="/tmp/tpch_mongo_tmp/tpch_data.duckdb"
 mkdir -p /tmp/tpch_mongo_tmp
 
-# Generate TPC-H data in DuckDB
-# First drop schema if it exists from previous run
-echo "
-DROP SCHEMA IF EXISTS tpch CASCADE;
-" | $DUCKDB_PATH $TEMP_DB 2>/dev/null || true
+# Run each step separately with -c for reliable error detection.
+# DuckDB may exit 0 on SQL errors when reading from stdin/file, but -c propagates errors.
+$DUCKDB_PATH $TEMP_DB -c "DROP SCHEMA IF EXISTS tpch CASCADE;" 2>/dev/null || true
 
-# Generate TPC-H data
-# The tpch extension should be available when DuckDB is built with extension support
-# Try to load it - if it fails, the error message will guide the user
-echo "
-LOAD tpch;
-CREATE SCHEMA tpch;
-CALL dbgen(sf=$SCALE_FACTOR, schema='tpch');
-" | $DUCKDB_PATH $TEMP_DB || {
-    echo ""
+$DUCKDB_PATH $TEMP_DB -c "LOAD tpch;" || {
     echo "Error: Failed to load tpch extension."
-    echo ""
-    echo "The tpch extension needs to be available. Options:"
-    echo "1. Rebuild DuckDB with tpch extension: make clean && make"
-    echo "2. Or install tpch extension manually (if available online)"
-    echo ""
+    echo "Rebuild DuckDB with tpch: make clean && make release"
     exit 1
 }
+
+$DUCKDB_PATH $TEMP_DB -c "CREATE SCHEMA IF NOT EXISTS tpch;" || {
+    echo "Error: Failed to create tpch schema."
+    exit 1
+}
+
+$DUCKDB_PATH $TEMP_DB -c "LOAD tpch; CALL dbgen(sf=$SCALE_FACTOR, schema='tpch');" || {
+    echo "Error: Failed to generate TPC-H data with dbgen."
+    exit 1
+}
+
+# Verify data was actually generated
+REGION_COUNT=$($DUCKDB_PATH $TEMP_DB -csv -noheader -c "SELECT count(*) FROM tpch.region;" 2>&1) || {
+    echo "Error: TPC-H schema exists but has no data."
+    echo "DuckDB output: $REGION_COUNT"
+    exit 1
+}
+echo "TPC-H data generated successfully ($REGION_COUNT regions)"
 
 echo ""
 echo "=== Loading TPC-H data into MongoDB ==="
@@ -75,15 +87,12 @@ for table in "${TPCH_TABLES[@]}"; do
     CSV_FILE="/tmp/tpch_mongo_tmp/${table}_export.csv"
     
     # Export table to CSV from the temporary database
-    # Note: tpch extension is already loaded in TEMP_DB
-    echo "
-    USE tpch;
-    COPY (SELECT * FROM $table) TO '$CSV_FILE' (HEADER, DELIMITER '|');
-    " | $DUCKDB_PATH $TEMP_DB
+    $DUCKDB_PATH $TEMP_DB -c "USE tpch; COPY (SELECT * FROM $table) TO '$CSV_FILE' (HEADER, DELIMITER '|');"
     
     if [ ! -f "$CSV_FILE" ]; then
-        echo "Warning: Failed to export $table to CSV, skipping"
-        continue
+        echo "Error: Failed to export $table to CSV"
+        echo "Check that DuckDB ($DUCKDB_PATH) has the tpch extension and the dbgen step succeeded."
+        exit 1
     fi
     
     # Load CSV into MongoDB using mongosh
