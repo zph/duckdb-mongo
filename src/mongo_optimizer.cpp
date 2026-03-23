@@ -53,7 +53,8 @@ static void ApplyBindingRulesToExpression(unique_ptr<Expression> &expr, const ve
 		    for (const auto &rule : rules) {
 			    if (colref.binding.table_index == rule.from_table_index) {
 				    colref.binding.table_index = rule.to_table_index;
-				    colref.binding.column_index += rule.column_offset;
+				    colref.binding.column_index =
+				        decltype(colref.binding.column_index)(idx_t(colref.binding.column_index) + rule.column_offset);
 			    }
 		    }
 	    });
@@ -128,8 +129,9 @@ static bsoncxx::document::value BuildMatchFromExistingFilters(const LogicalGet &
 		// ConvertFiltersToMongoQuery expects a mutable TableFilterSet (optional_ptr<TableFilterSet>),
 		// but LogicalGet::table_filters is const here. Copy the filter set for translation.
 		auto filters_copy = get.table_filters.Copy();
-		auto simple = ConvertFiltersToMongoQuery(optional_ptr<TableFilterSet>(filters_copy.get()), data.column_names,
-		                                         data.column_types, data.column_name_to_mongo_path);
+		auto simple =
+		    ConvertFiltersToMongoQuery(optional_ptr<TableFilterSet>(filters_copy.get()), data.column_names,
+		                               data.column_types, data.column_name_to_mongo_path, data.objectid_columns);
 		if (!DocIsEmpty(simple.view())) {
 			conjuncts.push_back(std::move(simple));
 		}

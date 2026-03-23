@@ -1,5 +1,5 @@
 # name: test/sql/query/objectid_filter.test
-# description: Test filtering on ObjectID fields (_id and foreign key references)
+# description: Test filtering on ObjectID fields and plain-string _id fields (issue #23, #27)
 # group: [query]
 
 require mongo
@@ -65,6 +65,40 @@ SELECT name, email FROM mongo_test.users WHERE _id > '507f1f77bcf86cd799439011' 
 ----
 Bob	bob@example.com
 Charlie	charlie@example.com
+
+# The string_id_test collection has documents where _id is a 24-hex-char string (NOT ObjectId).
+# Filter pushdown must send string comparisons, not ObjectId comparisons.
+
+query II
+SELECT name, value FROM mongo_test.string_id_test WHERE _id = 'aaaaaaaaaaaaaaaaaaaaaaaa';
+----
+Doc1	100
+
+query II
+SELECT name, value FROM mongo_test.string_id_test WHERE _id = 'bbbbbbbbbbbbbbbbbbbbbbbb';
+----
+Doc2	200
+
+# IN filter on string _id
+query II
+SELECT name, value FROM mongo_test.string_id_test WHERE _id IN ('aaaaaaaaaaaaaaaaaaaaaaaa', 'cccccccccccccccccccccccc') ORDER BY name;
+----
+Doc1	100
+Doc3	300
+
+# Range filter on string _id
+query II
+SELECT name, value FROM mongo_test.string_id_test WHERE _id > 'aaaaaaaaaaaaaaaaaaaaaaaa' AND _id <= 'cccccccccccccccccccccccc' ORDER BY _id;
+----
+Doc2	200
+Doc3	300
+
+# Verify ref_id (a non-_id column with 24-hex values) also works as string
+query II
+SELECT name, value FROM mongo_test.string_id_test WHERE ref_id = 'aaaaaaaaaaaaaaaaaaaaaaaa' ORDER BY name;
+----
+Doc2	200
+Doc3	300
 
 statement ok
 DETACH mongo_test;

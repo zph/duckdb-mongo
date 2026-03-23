@@ -334,6 +334,29 @@ db.object_container_test.insertMany([
   }
 ]);
 
+// Collection with string _id values that happen to be 24 hex characters (NOT ObjectIds).
+// Reproduces issue #27: filter pushdown must not convert these to ObjectId.
+db.string_id_test.insertMany([
+  {
+    _id: 'aaaaaaaaaaaaaaaaaaaaaaaa',
+    name: 'Doc1',
+    value: 100,
+    ref_id: 'bbbbbbbbbbbbbbbbbbbbbbbb'
+  },
+  {
+    _id: 'bbbbbbbbbbbbbbbbbbbbbbbb',
+    name: 'Doc2',
+    value: 200,
+    ref_id: 'aaaaaaaaaaaaaaaaaaaaaaaa'
+  },
+  {
+    _id: 'cccccccccccccccccccccccc',
+    name: 'Doc3',
+    value: 300,
+    ref_id: 'aaaaaaaaaaaaaaaaaaaaaaaa'
+  }
+]);
+
 // Create collections with __schema documents for testing schema functionality
 // These simulate Atlas SQL collections with predefined schemas
 
@@ -477,7 +500,7 @@ print('Collections: ' + db.getCollectionNames().join(', '));
 
 echo ""
 echo "Test MongoDB database '$MONGO_DB' created successfully!"
-echo "Collections: users, products, orders, decimal_test, empty_collection, type_conflicts, deeply_nested, nested_scalars_test, object_container_test, schema_test_simple, schema_test_nested, schema_test_paths, schema_test_with_id, schema_test_types"
+echo "Collections: users, products, orders, decimal_test, empty_collection, type_conflicts, deeply_nested, nested_scalars_test, object_container_test, string_id_test, schema_test_simple, schema_test_nested, schema_test_paths, schema_test_with_id, schema_test_types"
 echo ""
 
 # Export environment variables for tests
