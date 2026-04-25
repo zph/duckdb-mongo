@@ -374,8 +374,7 @@ static bsoncxx::document::value ConvertSingleFilterToMongo(const TableFilter &fi
 				bsoncxx::builder::basic::document merged_doc;
 				for (auto &child : conj.children) {
 					ExpressionFilter child_ef(child->Copy());
-					auto child_doc =
-					    ConvertSingleFilterToMongo(child_ef, column_name, column_type, objectid_columns);
+					auto child_doc = ConvertSingleFilterToMongo(child_ef, column_name, column_type, objectid_columns);
 					auto child_view = child_doc.view();
 					for (auto it = child_view.begin(); it != child_view.end(); ++it) {
 						if (it->key() == column_name && it->type() == bsoncxx::type::k_document) {
@@ -397,8 +396,7 @@ static bsoncxx::document::value ConvertSingleFilterToMongo(const TableFilter &fi
 				bsoncxx::builder::basic::array or_array;
 				for (auto &child : conj.children) {
 					ExpressionFilter child_ef(child->Copy());
-					auto child_doc =
-					    ConvertSingleFilterToMongo(child_ef, column_name, column_type, objectid_columns);
+					auto child_doc = ConvertSingleFilterToMongo(child_ef, column_name, column_type, objectid_columns);
 					if (!child_doc.view().empty()) {
 						or_array.append(child_doc.view());
 					}
