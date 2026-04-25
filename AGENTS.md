@@ -180,3 +180,4 @@ Two GitHub Actions workflows in `.github/workflows/`:
 - **JSON format in tests**: Don't assert exact JSON strings from `bsoncxx::to_json()` — spacing varies by library version. Use `LIKE '%expected_substring%'` or `IS NOT NULL` checks instead.
 - **Underscore flattening**: Nested doc `a.b` becomes column `a_b`. If a top-level field `a_b` also exists, there's a name collision. Be aware of this when working with schema inference.
 - **DuckDB submodule**: The `duckdb` directory is a git submodule pinned to a specific version. Don't update it without validating compatibility.
+
