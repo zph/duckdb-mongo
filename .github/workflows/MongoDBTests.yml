@@ -8,12 +8,28 @@ defaults:
     shell: bash
 
 jobs:
+  resolve-version:
+    name: Resolve DuckDB version
+    runs-on: ubuntu-latest
+    outputs:
+      duckdb_version: ${{ steps.resolve.outputs.duckdb_version }}
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: 'true'
+    - name: Get DuckDB submodule version
+      id: resolve
+      run: |
+        version=$(cd duckdb && git describe --tags --always 2>/dev/null || git -C duckdb rev-parse --short HEAD)
+        echo "duckdb_version=$version" >> "$GITHUB_OUTPUT"
+        echo "Resolved DuckDB version: $version"
+
   linux-tests-mongodb:
-    name: Run tests on Linux with MongoDB
+    name: Run tests on Linux with MongoDB (${{ needs.resolve-version.outputs.duckdb_version }}, linux_amd64)
+    needs: resolve-version
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        duckdb_version: [ '<submodule_version>' ]
         arch: ['linux_amd64']
         include:
           - arch: 'linux_amd64'
@@ -71,12 +87,6 @@ jobs:
       with:
         fetch-depth: 0
         submodules: 'true'
-
-    - name: Checkout DuckDB to version
-      if: ${{ matrix.duckdb_version != '<submodule_version>'}}
-      run: |
-        cd duckdb
-        git checkout ${{ matrix.duckdb_version }}
 
     - name: Setup Ccache
       uses: hendrikmuhs/ccache-action@main
@@ -155,5 +165,5 @@ jobs:
           grep -i "skip" test.log | grep -v "All tests passed" | grep -v "test cases"
           exit 1
         fi
-        echo "✓ All $TEST_CASES test cases executed successfully (no skips)"
+        echo "All $TEST_CASES test cases executed successfully (no skips)"
 
