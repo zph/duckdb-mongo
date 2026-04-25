@@ -2,6 +2,7 @@
 
 #include "mongo_table_function.hpp"
 #include "mongo_filter_pushdown.hpp"
+#include "mongo_compat.hpp"
 
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/optimizer/optimizer.hpp"
@@ -124,13 +125,28 @@ static bsoncxx::document::value BuildMatchFromExistingFilters(const LogicalGet &
 		conjuncts.push_back(bsoncxx::from_json(data.filter_query));
 	}
 
-	// TableFilterSet pushdown (simple comparisons)
+	// TableFilterSet pushdown (simple comparisons).
 	if (MongoHasFilters(get.table_filters)) {
-		// ConvertFiltersToMongoQuery expects a mutable TableFilterSet (optional_ptr<TableFilterSet>),
-		// but LogicalGet::table_filters is const here. Copy the filter set for translation.
+#ifdef DUCKDB_MAIN_VECTOR_API
+		// DuckDB main: filters are keyed by ProjectionIndex (position within column_ids).
+		// Remap to schema column indices before converting to MongoDB query.
+		auto remapped_filters = make_uniq<TableFilterSet>();
+		auto &col_ids = get.GetColumnIds();
 		auto filters_copy = get.table_filters.Copy();
+		MongoForEachFilter(*filters_copy, [&](idx_t proj_idx, TableFilter &filter) {
+			if (proj_idx < col_ids.size()) {
+				idx_t schema_idx = col_ids[proj_idx].GetPrimaryIndex();
+				MongoSetFilter(*remapped_filters, schema_idx, filter.Copy());
+			}
+		});
+		auto *filters_to_use = remapped_filters.get();
+#else
+		// DuckDB v1.5.x: filters are already keyed by schema column index.
+		auto filters_copy = get.table_filters.Copy();
+		auto *filters_to_use = filters_copy.get();
+#endif
 		auto simple =
-		    ConvertFiltersToMongoQuery(optional_ptr<TableFilterSet>(filters_copy.get()), data.column_names,
+		    ConvertFiltersToMongoQuery(optional_ptr<TableFilterSet>(filters_to_use), data.column_names,
 		                               data.column_types, data.column_name_to_mongo_path, data.objectid_columns);
 		if (!DocIsEmpty(simple.view())) {
 			conjuncts.push_back(std::move(simple));

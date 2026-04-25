@@ -1,4 +1,5 @@
 #include "mongo_filter_pushdown.hpp"
+#include "mongo_compat.hpp"
 
 #include "duckdb/planner/filter/conjunction_filter.hpp"
 #include "duckdb/planner/filter/constant_filter.hpp"
@@ -10,6 +11,15 @@
 #include "duckdb/common/types/date.hpp"
 #include "duckdb/common/types/time.hpp"
 #include "duckdb/common/types/timestamp.hpp"
+
+// DuckDB main uses ExpressionFilter wrapping BoundComparisonExpression instead of ConstantFilter.
+#ifdef DUCKDB_HAS_EXPRESSION_FILTER
+#include "duckdb/planner/filter/expression_filter.hpp"
+#include "duckdb/planner/expression/bound_comparison_expression.hpp"
+#include "duckdb/planner/expression/bound_constant_expression.hpp"
+#include "duckdb/planner/expression/bound_conjunction_expression.hpp"
+#include "duckdb/planner/expression/bound_operator_expression.hpp"
+#endif
 
 #include <bsoncxx/builder/basic/array.hpp>
 #include <bsoncxx/builder/basic/document.hpp>
@@ -296,17 +306,124 @@ static bsoncxx::document::value ConvertSingleFilterToMongo(const TableFilter &fi
 		break;
 	}
 	case TableFilterType::DYNAMIC_FILTER: {
-		// DynamicFilter contains a ConstantFilter that can be updated at runtime
+		// DynamicFilter wraps a runtime-updatable filter.
 		const auto &dyn_filter = filter.Cast<DynamicFilter>();
-		if (!dyn_filter.filter_data || !dyn_filter.filter_data->initialized || !dyn_filter.filter_data->filter) {
+		if (!dyn_filter.filter_data || !dyn_filter.filter_data->initialized) {
 			break;
 		}
-		if (dyn_filter.filter_data->filter) {
-			return ConvertSingleFilterToMongo(*dyn_filter.filter_data->filter, column_name, column_type,
-			                                  objectid_columns);
+#ifdef DUCKDB_MAIN_VECTOR_API
+		// DuckDB main: DynamicFilterData exposes comparison_type and constant directly.
+		ConstantFilter const_filter(dyn_filter.filter_data->comparison_type, dyn_filter.filter_data->constant);
+#else
+		// DuckDB v1.5.x: DynamicFilterData wraps a ConstantFilter.
+		if (!dyn_filter.filter_data->filter) {
+			break;
+		}
+		auto &const_filter = *dyn_filter.filter_data->filter;
+#endif
+		return ConvertSingleFilterToMongo(const_filter, column_name, column_type, objectid_columns);
+	}
+#ifdef DUCKDB_HAS_EXPRESSION_FILTER
+	case TableFilterType::EXPRESSION_FILTER: {
+		// DuckDB main wraps all scan filters in ExpressionFilter containing a BoundComparisonExpression.
+		// Extract the comparison type and constant, then delegate to the ConstantFilter path.
+		const auto &expr_filter = filter.Cast<ExpressionFilter>();
+		if (!expr_filter.expr) {
+			break;
+		}
+		auto &inner_expr = *expr_filter.expr;
+		// Handle comparison expressions (e.g., col = 5, col > 10).
+		if (inner_expr.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
+			auto &cmp = inner_expr.Cast<BoundComparisonExpression>();
+			// The constant can be on either side. Identify which side is the constant.
+			Expression *const_side = nullptr;
+			ExpressionType cmp_type = cmp.GetExpressionType();
+			if (cmp.right->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
+				const_side = cmp.right.get();
+			} else if (cmp.left->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
+				const_side = cmp.left.get();
+				// Flip the comparison direction when the constant is on the left.
+				switch (cmp_type) {
+				case ExpressionType::COMPARE_LESSTHAN:
+					cmp_type = ExpressionType::COMPARE_GREATERTHAN;
+					break;
+				case ExpressionType::COMPARE_LESSTHANOREQUALTO:
+					cmp_type = ExpressionType::COMPARE_GREATERTHANOREQUALTO;
+					break;
+				case ExpressionType::COMPARE_GREATERTHAN:
+					cmp_type = ExpressionType::COMPARE_LESSTHAN;
+					break;
+				case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
+					cmp_type = ExpressionType::COMPARE_LESSTHANOREQUALTO;
+					break;
+				default:
+					break;
+				}
+			}
+			if (const_side) {
+				auto &const_expr = const_side->Cast<BoundConstantExpression>();
+				ConstantFilter const_filter(cmp_type, const_expr.value);
+				return ConvertSingleFilterToMongo(const_filter, column_name, column_type, objectid_columns);
+			}
+		}
+		// Handle conjunction expressions (AND / OR).
+		if (inner_expr.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
+			auto &conj = inner_expr.Cast<BoundConjunctionExpression>();
+			if (conj.GetExpressionType() == ExpressionType::CONJUNCTION_AND) {
+				// Recursively convert each child and merge into a single AND document.
+				bsoncxx::builder::basic::document merged_doc;
+				for (auto &child : conj.children) {
+					ExpressionFilter child_ef(child->Copy());
+					auto child_doc = ConvertSingleFilterToMongo(child_ef, column_name, column_type, objectid_columns);
+					auto child_view = child_doc.view();
+					for (auto it = child_view.begin(); it != child_view.end(); ++it) {
+						if (it->key() == column_name && it->type() == bsoncxx::type::k_document) {
+							for (auto nested = it->get_document().value.begin();
+							     nested != it->get_document().value.end(); ++nested) {
+								merged_doc.append(bsoncxx::builder::basic::kvp(
+								    nested->key(), bsoncxx::types::bson_value::value(nested->get_value())));
+							}
+						} else {
+							merged_doc.append(bsoncxx::builder::basic::kvp(
+							    it->key(), bsoncxx::types::bson_value::value(it->get_value())));
+						}
+					}
+				}
+				doc.append(bsoncxx::builder::basic::kvp(column_name, merged_doc.extract()));
+				return doc.extract();
+			}
+			if (conj.GetExpressionType() == ExpressionType::CONJUNCTION_OR) {
+				bsoncxx::builder::basic::array or_array;
+				for (auto &child : conj.children) {
+					ExpressionFilter child_ef(child->Copy());
+					auto child_doc = ConvertSingleFilterToMongo(child_ef, column_name, column_type, objectid_columns);
+					if (!child_doc.view().empty()) {
+						or_array.append(child_doc.view());
+					}
+				}
+				if (!or_array.view().empty()) {
+					doc.append(bsoncxx::builder::basic::kvp("$or", or_array.extract()));
+				}
+				return doc.extract();
+			}
+		}
+		// Handle IS NULL / IS NOT NULL operator expressions.
+		if (inner_expr.GetExpressionClass() == ExpressionClass::BOUND_OPERATOR) {
+			auto &op_expr = inner_expr.Cast<BoundOperatorExpression>();
+			if (op_expr.GetExpressionType() == ExpressionType::OPERATOR_IS_NULL) {
+				doc.append(bsoncxx::builder::basic::kvp(column_name, bsoncxx::types::b_null {}));
+				return doc.extract();
+			}
+			if (op_expr.GetExpressionType() == ExpressionType::OPERATOR_IS_NOT_NULL) {
+				bsoncxx::builder::basic::document ne_doc;
+				ne_doc.append(bsoncxx::builder::basic::kvp("$ne", bsoncxx::types::b_null {}));
+				doc.append(bsoncxx::builder::basic::kvp(column_name, ne_doc.extract()));
+				return doc.extract();
+			}
 		}
 		break;
 	}
+#endif
 	default:
 		break;
 	}

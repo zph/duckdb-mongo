@@ -2,6 +2,7 @@
 
 #include "duckdb/parser/parsed_data/create_table_function_info.hpp"
 #include "mongo_table_function.hpp"
+#include "mongo_compat.hpp"
 #include "duckdb/main/database_manager.hpp"
 #include "duckdb/main/attached_database.hpp"
 #include "mongo_catalog.hpp"
@@ -41,7 +42,7 @@ static void ClearCacheFunction(ClientContext &context, TableFunctionInput &data_
 
 	// Return success
 	output.SetCardinality(1);
-	output.data[0].Reference(Value::BOOLEAN(true));
+	MongoVectorReferenceSingleValue(output.data[0], Value::BOOLEAN(true));
 	data.finished = true;
 }
 

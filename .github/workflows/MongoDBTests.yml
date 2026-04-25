@@ -9,11 +9,12 @@ defaults:
 
 jobs:
   linux-tests-mongodb:
-    name: Run tests on Linux with MongoDB
+    name: Run tests on Linux with MongoDB (${{ matrix.duckdb_version }})
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
-        duckdb_version: [ '<submodule_version>' ]
+        duckdb_version: ['submodule', 'main']
         arch: ['linux_amd64']
         include:
           - arch: 'linux_amd64'
@@ -73,15 +74,17 @@ jobs:
         submodules: 'true'
 
     - name: Checkout DuckDB to version
-      if: ${{ matrix.duckdb_version != '<submodule_version>'}}
+      if: ${{ matrix.duckdb_version != 'submodule' }}
       run: |
         cd duckdb
+        git fetch origin ${{ matrix.duckdb_version }}
         git checkout ${{ matrix.duckdb_version }}
+        echo "Switched DuckDB to $(git log --oneline -1)"
 
     - name: Setup Ccache
       uses: hendrikmuhs/ccache-action@main
       with:
-        key: ${{ github.job }}
+        key: ${{ github.job }}-${{ matrix.duckdb_version }}
         save: ${{ github.ref == 'refs/heads/main' || github.repository != 'stephaniewang526/duckdb-mongo' }}
 
     - name: Setup vcpkg
@@ -155,5 +158,5 @@ jobs:
           grep -i "skip" test.log | grep -v "All tests passed" | grep -v "test cases"
           exit 1
         fi
-        echo "✓ All $TEST_CASES test cases executed successfully (no skips)"
+        echo "All $TEST_CASES test cases executed successfully (no skips)"
 

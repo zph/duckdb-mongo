@@ -1,6 +1,7 @@
 #include "mongo_table_function.hpp"
 #include "mongo_instance.hpp"
 #include "mongo_filter_pushdown.hpp"
+#include "mongo_compat.hpp"
 #include "duckdb/common/types/timestamp.hpp"
 #include "duckdb/common/types/date.hpp"
 #include "duckdb/common/types/time.hpp"
@@ -638,8 +639,8 @@ void MongoScanFunction(ClientContext &context, TableFunctionInput &data_p, DataC
 		vec.SetVectorType(VectorType::FLAT_VECTOR);
 		if (((*column_types)[col_idx].id() == LogicalTypeId::LIST ||
 		     (*column_types)[col_idx].id() == LogicalTypeId::STRUCT) &&
-		    !vec.GetAuxiliary()) {
-			vec.Initialize(false, STANDARD_VECTOR_SIZE);
+		    !MongoVectorHasAuxiliary(vec)) {
+			MongoVectorInitializeUninitialized(vec, STANDARD_VECTOR_SIZE);
 		}
 	}
 
@@ -652,7 +653,7 @@ void MongoScanFunction(ClientContext &context, TableFunctionInput &data_p, DataC
 		}
 		auto &vec = output.data[0];
 		vec.SetVectorType(VectorType::FLAT_VECTOR);
-		FlatVector::GetData<int64_t>(vec)[0] = 0;
+		MongoFlatVectorGetDataMutable<int64_t>(vec)[0] = 0;
 		FlatVector::SetNull(vec, 0, false);
 		output.SetCardinality(1);
 		state.finished = true;
