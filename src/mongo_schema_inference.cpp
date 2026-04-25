@@ -1,4 +1,5 @@
 #include "mongo_table_function.hpp"
+#include "mongo_compat.hpp"
 #ifndef DUCKDB_HAS_EXTENSION_CALLBACK_MANAGER
 #if __has_include("duckdb/main/extension_callback_manager.hpp")
 #define DUCKDB_HAS_EXTENSION_CALLBACK_MANAGER 1
@@ -999,7 +1000,7 @@ bool FlattenDocument(const bsoncxx::document::view &doc, const std::vector<strin
 				// For unknown types, use a default representation
 				str_val = "<unknown type>";
 			}
-			FlatVector::GetData<string_t>(output.data[col_idx])[row_idx] =
+			MongoFlatVectorGetDataMutable<string_t>(output.data[col_idx])[row_idx] =
 			    StringVector::AddString(output.data[col_idx], str_val);
 			break;
 		}
@@ -1019,7 +1020,7 @@ bool FlattenDocument(const bsoncxx::document::view &doc, const std::vector<strin
 			} else if (element.type() == bsoncxx::type::k_double) {
 				int_val = static_cast<int64_t>(element.get_double().value);
 			}
-			FlatVector::GetData<int64_t>(output.data[col_idx])[row_idx] = int_val;
+			MongoFlatVectorGetDataMutable<int64_t>(output.data[col_idx])[row_idx] = int_val;
 			break;
 		}
 		case LogicalTypeId::HUGEINT: {
@@ -1048,7 +1049,7 @@ bool FlattenDocument(const bsoncxx::document::view &doc, const std::vector<strin
 					huge_val = 0;
 				}
 			}
-			FlatVector::GetData<hugeint_t>(output.data[col_idx])[row_idx] = huge_val;
+			MongoFlatVectorGetDataMutable<hugeint_t>(output.data[col_idx])[row_idx] = huge_val;
 			break;
 		}
 		case LogicalTypeId::DOUBLE: {
@@ -1074,7 +1075,7 @@ bool FlattenDocument(const bsoncxx::document::view &doc, const std::vector<strin
 					double_val = 0.0;
 				}
 			}
-			FlatVector::GetData<double>(output.data[col_idx])[row_idx] = double_val;
+			MongoFlatVectorGetDataMutable<double>(output.data[col_idx])[row_idx] = double_val;
 			break;
 		}
 		case LogicalTypeId::BOOLEAN: {
@@ -1089,7 +1090,7 @@ bool FlattenDocument(const bsoncxx::document::view &doc, const std::vector<strin
 			if (element.type() == bsoncxx::type::k_bool) {
 				bool_val = element.get_bool().value;
 			}
-			FlatVector::GetData<bool>(output.data[col_idx])[row_idx] = bool_val;
+			MongoFlatVectorGetDataMutable<bool>(output.data[col_idx])[row_idx] = bool_val;
 			break;
 		}
 		case LogicalTypeId::DATE: {
@@ -1110,7 +1111,7 @@ bool FlattenDocument(const bsoncxx::document::view &doc, const std::vector<strin
 			} else {
 				date_val = date_t(0);
 			}
-			FlatVector::GetData<date_t>(output.data[col_idx])[row_idx] = date_val;
+			MongoFlatVectorGetDataMutable<date_t>(output.data[col_idx])[row_idx] = date_val;
 			break;
 		}
 		case LogicalTypeId::TIMESTAMP: {
@@ -1128,7 +1129,7 @@ bool FlattenDocument(const bsoncxx::document::view &doc, const std::vector<strin
 			} else {
 				ts_val = Timestamp::FromEpochMs(0);
 			}
-			FlatVector::GetData<timestamp_t>(output.data[col_idx])[row_idx] = ts_val;
+			MongoFlatVectorGetDataMutable<timestamp_t>(output.data[col_idx])[row_idx] = ts_val;
 			break;
 		}
 		default: {

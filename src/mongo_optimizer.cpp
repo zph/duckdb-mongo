@@ -124,13 +124,21 @@ static bsoncxx::document::value BuildMatchFromExistingFilters(const LogicalGet &
 		conjuncts.push_back(bsoncxx::from_json(data.filter_query));
 	}
 
-	// TableFilterSet pushdown (simple comparisons)
+	// TableFilterSet pushdown (simple comparisons).
+	// Filters in get.table_filters are keyed by ProjectionIndex (position within column_ids),
+	// but ConvertFiltersToMongoQuery expects schema column indices. Remap before converting.
 	if (MongoHasFilters(get.table_filters)) {
-		// ConvertFiltersToMongoQuery expects a mutable TableFilterSet (optional_ptr<TableFilterSet>),
-		// but LogicalGet::table_filters is const here. Copy the filter set for translation.
+		auto remapped_filters = make_uniq<TableFilterSet>();
+		auto &col_ids = get.GetColumnIds();
 		auto filters_copy = get.table_filters.Copy();
+		MongoForEachFilter(*filters_copy, [&](idx_t proj_idx, TableFilter &filter) {
+			if (proj_idx < col_ids.size()) {
+				idx_t schema_idx = col_ids[proj_idx].GetPrimaryIndex();
+				MongoSetFilter(*remapped_filters, schema_idx, filter.Copy());
+			}
+		});
 		auto simple =
-		    ConvertFiltersToMongoQuery(optional_ptr<TableFilterSet>(filters_copy.get()), data.column_names,
+		    ConvertFiltersToMongoQuery(optional_ptr<TableFilterSet>(remapped_filters.get()), data.column_names,
 		                               data.column_types, data.column_name_to_mongo_path, data.objectid_columns);
 		if (!DocIsEmpty(simple.view())) {
 			conjuncts.push_back(std::move(simple));
