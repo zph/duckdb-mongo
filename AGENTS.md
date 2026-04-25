@@ -8,10 +8,10 @@ A DuckDB extension that integrates MongoDB, enabling direct SQL queries over Mon
 
 ## Agent Skills
 
-Reusable workflows in `.agents/skills/`:
+Reusable workflows in `.agents/skills/`. When a task matches one of these, read the corresponding file and follow its steps:
 
-- **`/test`** — Rebuild the extension and run tests. Handles MongoDB startup, test data creation, incremental builds, and single-file or fuzzy test selection.
-- **`/repro-issue`** — Investigate a GitHub issue end-to-end: fetch it, analyze root cause, create minimal test data, write a failing test, implement and verify a fix.
+- **`.agents/skills/test.md`** — Use when asked to build, run tests, or verify changes. Covers MongoDB setup, incremental builds, and test execution.
+- **`.agents/skills/repro-issue.md`** — Use when asked to investigate, reproduce, or fix a GitHub issue. Covers fetching the issue, root cause analysis, writing a failing test, and verifying the fix.
 
 ## Development Command Quick Reference
 
