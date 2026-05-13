@@ -88,8 +88,8 @@ unique_ptr<FunctionData> MongoScanBind(ClientContext &context, TableFunctionBind
 
 	// The first argument is either a raw MongoDB URI or a secret name.
 	// If it looks like a URI, use it directly; otherwise treat it as a secret name.
-	bool is_uri = StringUtil::StartsWith(first_arg, "mongodb://") ||
-	              StringUtil::StartsWith(first_arg, "mongodb+srv://");
+	bool is_uri =
+	    StringUtil::StartsWith(first_arg, "mongodb://") || StringUtil::StartsWith(first_arg, "mongodb+srv://");
 	if (is_uri) {
 		result->connection_string = first_arg;
 	} else {
