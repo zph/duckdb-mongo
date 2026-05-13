@@ -316,8 +316,18 @@ WHERE unnest.product = 'Mouse';
 You can also use the `mongo_scan` table function directly without attaching:
 
 ```sql
--- Basic usage
+-- Basic usage with a raw URI
 SELECT * FROM mongo_scan('mongodb://localhost:27017', 'mydb', 'mycollection');
+
+-- Using a named secret (recommended for Atlas / SRV connections)
+CREATE SECRET my_atlas (
+    TYPE MONGO,
+    HOST 'cluster0.xxxxx.mongodb.net',
+    USER 'myuser',
+    PASSWORD 'mypassword',
+    SRV 'true'
+);
+SELECT * FROM mongo_scan('my_atlas', 'mydb', 'mycollection');
 
 -- With filter and sample size
 SELECT * FROM mongo_scan('mongodb://localhost:27017', 'mydb', 'mycollection', 
@@ -337,7 +347,7 @@ SELECT * FROM mongo_scan('mongodb://localhost:27017', 'mydb', 'mycollection',
 ```
 
 **Parameters:**
-- `connection_string`: MongoDB connection string
+- `connection_string`: MongoDB connection string (`mongodb://` or `mongodb+srv://`) **or** a secret name created with `CREATE SECRET (TYPE MONGO, ...)`
 - `database`: MongoDB database name
 - `collection`: MongoDB collection name
 - `filter` (optional): MongoDB query filter as JSON string (e.g., `'{"status": "active"}'`)
