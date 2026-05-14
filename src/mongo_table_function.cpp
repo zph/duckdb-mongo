@@ -2,6 +2,7 @@
 #include "mongo_instance.hpp"
 #include "mongo_filter_pushdown.hpp"
 #include "mongo_compat.hpp"
+#include "mongo_secrets.hpp"
 #include "duckdb/common/types/timestamp.hpp"
 #include "duckdb/common/types/date.hpp"
 #include "duckdb/common/types/time.hpp"
@@ -81,9 +82,26 @@ unique_ptr<FunctionData> MongoScanBind(ClientContext &context, TableFunctionBind
 		    "mongo_scan requires at least 3 arguments: connection_string, database, collection");
 	}
 
-	result->connection_string = input.inputs[0].GetValue<string>();
+	string first_arg = input.inputs[0].GetValue<string>();
 	result->database_name = input.inputs[1].GetValue<string>();
 	result->collection_name = input.inputs[2].GetValue<string>();
+
+	// The first argument is either a raw MongoDB URI or a secret name.
+	// If it looks like a URI, use it directly; otherwise treat it as a secret name.
+	bool is_uri =
+	    StringUtil::StartsWith(first_arg, "mongodb://") || StringUtil::StartsWith(first_arg, "mongodb+srv://");
+	if (is_uri) {
+		result->connection_string = first_arg;
+	} else {
+		auto secret_entry = GetMongoSecret(context, first_arg);
+		if (!secret_entry) {
+			throw BinderException("Secret with name \"%s\" not found. Pass a MongoDB URI (mongodb:// or "
+			                      "mongodb+srv://) or a valid secret name.",
+			                      first_arg);
+		}
+		const auto &kv_secret = dynamic_cast<const KeyValueSecret &>(*secret_entry->secret);
+		result->connection_string = BuildMongoConnectionString(kv_secret, "");
+	}
 
 	// Parse named parameters
 	if (input.named_parameters.find("filter") != input.named_parameters.end()) {
