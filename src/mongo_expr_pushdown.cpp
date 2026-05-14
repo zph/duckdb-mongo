@@ -172,7 +172,7 @@ static bool ValidateFunctionSignature(const BoundFunctionExpression &func_expr, 
 }
 
 static bool IsSafeMongoFunction(const BoundFunctionExpression &func_expr) {
-	const MongoFunctionMapping *mapping = FindFunctionMapping(func_expr.function.name);
+	const MongoFunctionMapping *mapping = FindFunctionMapping(MONGO_FUNCTION_NAME(func_expr.function));
 	if (!mapping) {
 		return false;
 	}
@@ -190,15 +190,16 @@ static bool IsSafeMongoFunction(const BoundFunctionExpression &func_expr) {
 }
 
 static bool IsSafeMongoExpr(const Expression &expr) {
-	if (expr.GetExpressionClass() != ExpressionClass::BOUND_COMPARISON) {
+	if (!MongoIsComparisonExpr(expr)) {
 		return false;
 	}
-	auto &comp_expr = expr.Cast<BoundComparisonExpression>();
-	if (comp_expr.left && comp_expr.left->GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
-		return IsSafeMongoFunction(comp_expr.left->Cast<BoundFunctionExpression>());
+	const Expression &left = MongoComparisonLeft(expr);
+	const Expression &right = MongoComparisonRight(expr);
+	if (left.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
+		return IsSafeMongoFunction(left.Cast<BoundFunctionExpression>());
 	}
-	if (comp_expr.right && comp_expr.right->GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
-		return IsSafeMongoFunction(comp_expr.right->Cast<BoundFunctionExpression>());
+	if (right.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
+		return IsSafeMongoFunction(right.Cast<BoundFunctionExpression>());
 	}
 	return false;
 }
@@ -207,7 +208,7 @@ static bool IsSafeMongoExpr(const Expression &expr) {
 static bool ConvertFunctionToMongoExpr(const BoundFunctionExpression &func_expr, const vector<string> &column_names,
                                        const unordered_map<string, string> &column_name_to_mongo_path,
                                        bsoncxx::builder::basic::document &result_builder) {
-	const string &func_name = func_expr.function.name;
+	const string func_name = MONGO_FUNCTION_NAME(func_expr.function);
 
 	// Find function mapping
 	const MongoFunctionMapping *mapping = FindFunctionMapping(func_name);
@@ -259,13 +260,12 @@ static bool ConvertFunctionToMongoExpr(const BoundFunctionExpression &func_expr,
 }
 
 static bool IsSimpleColumnToConstantComparison(const Expression &expr) {
-	if (expr.GetExpressionClass() != ExpressionClass::BOUND_COMPARISON) {
+	if (!MongoIsComparisonExpr(expr)) {
 		return false;
 	}
-	auto &comp_expr = expr.Cast<BoundComparisonExpression>();
 
-	const Expression *left_expr = comp_expr.left.get();
-	const Expression *right_expr = comp_expr.right.get();
+	const Expression *left_expr = &MongoComparisonLeft(expr);
+	const Expression *right_expr = &MongoComparisonRight(expr);
 
 	// Unwrap CAST on left side
 	while (left_expr->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
@@ -313,13 +313,11 @@ static bool ConvertExpressionToMongoExpr(const Expression &expr, const vector<st
 		}
 	}
 
-	switch (expr.GetExpressionClass()) {
-	case ExpressionClass::BOUND_COMPARISON: {
-		auto &comp_expr = expr.Cast<BoundComparisonExpression>();
-
-		// Unwrap CAST expressions on both sides to get to underlying expressions
-		const Expression *left_expr = comp_expr.left.get();
-		const Expression *right_expr = comp_expr.right.get();
+	// Use if/else so comparison detection works across DuckDB versions (comparisons are
+	// BoundComparisonExpression in v1.5.x and BoundFunctionExpression in DuckDB main).
+	if (MongoIsComparisonExpr(expr)) {
+		const Expression *left_expr = &MongoComparisonLeft(expr);
+		const Expression *right_expr = &MongoComparisonRight(expr);
 
 		// Unwrap CAST on left side
 		while (left_expr->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
@@ -339,16 +337,11 @@ static bool ConvertExpressionToMongoExpr(const Expression &expr, const vector<st
 		bool left_is_function = left_expr->GetExpressionClass() == ExpressionClass::BOUND_FUNCTION;
 		bool right_is_function = right_expr->GetExpressionClass() == ExpressionClass::BOUND_FUNCTION;
 
-		// Skip simple column-to-constant comparisons (e.g., age > 25)
-		// These should be handled by TableFilter conversion, which produces faster MongoDB native queries
-		// (e.g., {age: {$gt: 25}}) that can use indexes efficiently, rather than slower $expr queries
-		// (e.g., {$expr: {$gt: ["$age", 25]}}) which cannot use indexes as effectively.
 		if (left_is_column && right_is_constant && !left_is_function && !right_is_function) {
 			return false;
 		}
 
-		// Handle complex comparisons: column-to-column, function calls, etc.
-		ExpressionType comp_type = MONGO_EXPR_TYPE(comp_expr);
+		ExpressionType comp_type = expr.GetExpressionType();
 		string mongo_op;
 		switch (comp_type) {
 		case ExpressionType::COMPARE_GREATERTHAN:
@@ -373,11 +366,9 @@ static bool ConvertExpressionToMongoExpr(const Expression &expr, const vector<st
 			return false;
 		}
 
-		// Convert left and right sides to MongoDB expressions (using unwrapped expressions)
 		bsoncxx::builder::basic::array args_array;
 		bsoncxx::builder::basic::document left_expr_doc;
 
-		// Convert left side (using unwrapped expression)
 		string left_path = GetMongoPathFromExpression(*left_expr, column_names, column_name_to_mongo_path);
 		if (!left_path.empty()) {
 			args_array.append(left_path);
@@ -391,11 +382,8 @@ static bool ConvertExpressionToMongoExpr(const Expression &expr, const vector<st
 			return false;
 		}
 
-		// Convert right side (using unwrapped expression)
 		if (right_expr->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
 			auto &right_const = right_expr->Cast<BoundConstantExpression>();
-			// Cast constant to match left expression type if needed
-			// This handles cases like YEAR() returning BIGINT but constant being INTEGER
 			Value const_val = right_const.value;
 			if (MONGO_EXPR_RETURN_TYPE(*left_expr) != const_val.type()) {
 				Value casted_val;
@@ -404,14 +392,12 @@ static bool ConvertExpressionToMongoExpr(const Expression &expr, const vector<st
 					BoundConstantExpression casted_const(casted_val);
 					AppendConstantToBSONArray(casted_const, args_array);
 				} else {
-					// Cast failed - use original value
 					AppendConstantToBSONArray(right_const, args_array);
 				}
 			} else {
 				AppendConstantToBSONArray(right_const, args_array);
 			}
 		} else {
-			// Try to get MongoDB path (handles CAST-wrapped column references)
 			string right_path = GetMongoPathFromExpression(*right_expr, column_names, column_name_to_mongo_path);
 			if (!right_path.empty()) {
 				args_array.append(right_path);
@@ -427,17 +413,13 @@ static bool ConvertExpressionToMongoExpr(const Expression &expr, const vector<st
 			}
 		}
 
-		// Build comparison expression: { $mongo_op: [left_expr, right_expr] }
 		result_builder.append(bsoncxx::builder::basic::kvp(mongo_op, args_array.extract()));
 		return true;
-	}
-	case ExpressionClass::BOUND_FUNCTION: {
+	} else if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
 		auto &func_expr = expr.Cast<BoundFunctionExpression>();
 		return ConvertFunctionToMongoExpr(func_expr, column_names, column_name_to_mongo_path, result_builder);
 	}
-	default:
-		return false;
-	}
+	return false;
 }
 
 } // namespace

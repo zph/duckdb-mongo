@@ -4,16 +4,11 @@
 // Uses __has_include to detect the target DuckDB version at compile time.
 
 #include "duckdb/common/types/vector.hpp"
+#include "duckdb/planner/table_filter.hpp"
 
 // FlatVector was moved to a separate header on DuckDB main.
 #if __has_include("duckdb/common/vector/flat_vector.hpp")
 #include "duckdb/common/vector/flat_vector.hpp"
-#endif
-
-// --- ExpressionFilter detection ---
-// DuckDB main wraps all scan filters in ExpressionFilter; v1.5.x uses ConstantFilter directly.
-#if __has_include("duckdb/planner/filter/expression_filter.hpp")
-#define DUCKDB_HAS_EXPRESSION_FILTER 1
 #endif
 
 // --- Vector API compatibility ---
@@ -22,6 +17,21 @@
 #if __has_include("duckdb/common/types/size.hpp")
 #include "duckdb/common/types/size.hpp"
 #define DUCKDB_MAIN_VECTOR_API 1
+#endif
+
+#ifdef DUCKDB_MAIN_VECTOR_API
+#include "duckdb/planner/filter/expression_filter.hpp"
+// DuckDB main: bound_comparison_expression.hpp is transitively included above.
+#else
+// DuckDB v1.5.x: include explicitly so MongoIsComparisonExpr / MongoComparisonLeft/Right are available.
+#include "duckdb/planner/expression/bound_comparison_expression.hpp"
+#endif
+
+// DuckDB main made BoundSimpleFunction::name protected; use GetName() accessor.
+#ifdef DUCKDB_MAIN_VECTOR_API
+#define MONGO_FUNCTION_NAME(func) ((func).GetName())
+#else
+#define MONGO_FUNCTION_NAME(func) ((func).name)
 #endif
 
 namespace duckdb {
@@ -67,6 +77,42 @@ inline void MongoVectorReferenceSingleValue(Vector &vec, const Value &val) {
 inline void MongoSetVectorSize(Vector &vec, idx_t size) {
 #ifdef DUCKDB_MAIN_VECTOR_API
 	FlatVector::SetSize(vec, size);
+#endif
+}
+
+// Copy a single TableFilter (DuckDB main removed TableFilter::Copy(); only ExpressionFilter::Copy() remains).
+inline unique_ptr<TableFilter> MongoCopyFilter(const TableFilter &filter) {
+#ifdef DUCKDB_MAIN_VECTOR_API
+	auto &ef = static_cast<const ExpressionFilter &>(filter);
+	return ef.Copy();
+#else
+	return filter.Copy();
+#endif
+}
+
+// Cross-version comparison expression helpers.
+// DuckDB main: comparisons are BoundFunctionExpression; v1.5.x: BoundComparisonExpression.
+inline bool MongoIsComparisonExpr(const Expression &expr) {
+#ifdef DUCKDB_MAIN_VECTOR_API
+	return BoundComparisonExpression::IsComparison(expr);
+#else
+	return expr.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON;
+#endif
+}
+
+inline const Expression &MongoComparisonLeft(const Expression &expr) {
+#ifdef DUCKDB_MAIN_VECTOR_API
+	return BoundComparisonExpression::Left(expr.Cast<BoundFunctionExpression>());
+#else
+	return *expr.Cast<BoundComparisonExpression>().left;
+#endif
+}
+
+inline const Expression &MongoComparisonRight(const Expression &expr) {
+#ifdef DUCKDB_MAIN_VECTOR_API
+	return BoundComparisonExpression::Right(expr.Cast<BoundFunctionExpression>());
+#else
+	return *expr.Cast<BoundComparisonExpression>().right;
 #endif
 }
 
