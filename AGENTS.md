@@ -174,6 +174,25 @@ Two GitHub Actions workflows in `.github/workflows/`:
 - **MongoDBTests.yml** — Integration tests with real MongoDB 7.0 (Docker service). Builds, creates test data, runs `make test_release`, verifies ≥13 tests pass with no skips.
 - **MainDistributionPipeline.yml** — Extension distribution builds using DuckDB's `extension-ci-tools`. Builds for multiple platforms, runs format checks.
 
+### Debugging CI failures
+
+CI builds against two DuckDB targets: **DuckDB main** (submodule at HEAD of `duckdb/main`) and **DuckDB stable** (pinned release).
+
+For failures on the **DuckDB main** job, switch the submodule to `origin/main` and reproduce locally before reading CI logs:
+
+```bash
+cd duckdb && git fetch origin && git checkout origin/main && cd ..
+make -j$(sysctl -n hw.logicalcpu)
+```
+
+Fix compat issues locally, then restore the submodule to its original pinned commit before committing (don't bump the pin unintentionally):
+
+```bash
+cd duckdb && git checkout <original-sha> && cd ..
+```
+
+For failures on the **stable** job, reproduce with the pinned submodule as-is (`make` without touching the submodule).
+
 ## Common Pitfalls
 
 - **Stale build**: The `make release` repository packaging step can fail with `FileExistsError`. Fix: `rm -rf build/release/repository` and rebuild.
