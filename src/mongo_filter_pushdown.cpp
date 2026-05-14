@@ -171,48 +171,55 @@ static void AppendValueToDocument(bsoncxx::builder::basic::document &doc_builder
 	}
 }
 
+// Build a comparison MongoDB filter document from a comparison type and constant value.
+// Used by both the legacy ConstantFilter path and the DuckDB main ExpressionFilter path.
+static bsoncxx::document::value BuildComparisonFilterDoc(ExpressionType cmp_type, const Value &constant,
+                                                         const string &column_name, const LogicalType &column_type,
+                                                         const unordered_set<string> &objectid_columns) {
+	bsoncxx::builder::basic::document doc;
+	string mongo_op;
+	switch (cmp_type) {
+	case ExpressionType::COMPARE_EQUAL:
+		AppendValueToDocument(doc, column_name, constant, column_type, column_name, objectid_columns);
+		break;
+	case ExpressionType::COMPARE_NOTEQUAL:
+		mongo_op = "$ne";
+		break;
+	case ExpressionType::COMPARE_LESSTHAN:
+		mongo_op = "$lt";
+		break;
+	case ExpressionType::COMPARE_LESSTHANOREQUALTO:
+		mongo_op = "$lte";
+		break;
+	case ExpressionType::COMPARE_GREATERTHAN:
+		mongo_op = "$gt";
+		break;
+	case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
+		mongo_op = "$gte";
+		break;
+	default:
+		return doc.extract();
+	}
+	if (!mongo_op.empty()) {
+		bsoncxx::builder::basic::document op_doc;
+		AppendValueToDocument(op_doc, mongo_op, constant, column_type, column_name, objectid_columns);
+		doc.append(bsoncxx::builder::basic::kvp(column_name, op_doc.extract()));
+	}
+	return doc.extract();
+}
+
 static bsoncxx::document::value ConvertSingleFilterToMongo(const TableFilter &filter, const string &column_name,
                                                            const LogicalType &column_type,
                                                            const unordered_set<string> &objectid_columns) {
 	bsoncxx::builder::basic::document doc;
 
 	switch (filter.filter_type) {
+#ifndef DUCKDB_MAIN_VECTOR_API
+	// DuckDB v1.5.x uses typed TableFilter subclasses. DuckDB main uses ExpressionFilter for all scan filters.
 	case TableFilterType::CONSTANT_COMPARISON: {
 		const auto &constant_filter = filter.Cast<ConstantFilter>();
-		string mongo_op;
-
-		switch (constant_filter.comparison_type) {
-		case ExpressionType::COMPARE_EQUAL:
-			AppendValueToDocument(doc, column_name, constant_filter.constant, column_type, column_name,
-			                      objectid_columns);
-			break;
-		case ExpressionType::COMPARE_NOTEQUAL:
-			mongo_op = "$ne";
-			break;
-		case ExpressionType::COMPARE_LESSTHAN:
-			mongo_op = "$lt";
-			break;
-		case ExpressionType::COMPARE_LESSTHANOREQUALTO:
-			mongo_op = "$lte";
-			break;
-		case ExpressionType::COMPARE_GREATERTHAN:
-			mongo_op = "$gt";
-			break;
-		case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
-			mongo_op = "$gte";
-			break;
-		default:
-			// Unsupported comparison type, return empty filter
-			return doc.extract();
-		}
-
-		if (!mongo_op.empty()) {
-			bsoncxx::builder::basic::document op_doc;
-			AppendValueToDocument(op_doc, mongo_op, constant_filter.constant, column_type, column_name,
-			                      objectid_columns);
-			doc.append(bsoncxx::builder::basic::kvp(column_name, op_doc.extract()));
-		}
-		break;
+		return BuildComparisonFilterDoc(constant_filter.comparison_type, constant_filter.constant, column_name,
+		                                column_type, objectid_columns);
 	}
 	case TableFilterType::IN_FILTER: {
 		const auto &in_filter = filter.Cast<InFilter>();
@@ -239,15 +246,12 @@ static bsoncxx::document::value ConvertSingleFilterToMongo(const TableFilter &fi
 		break;
 	}
 	case TableFilterType::CONJUNCTION_AND: {
-		// For AND filters, combine conditions on the same column
 		const auto &conj_filter = static_cast<const ConjunctionFilter &>(filter);
 		bsoncxx::builder::basic::document merged_doc;
 		for (const auto &child_filter : conj_filter.child_filters) {
 			auto child_doc = ConvertSingleFilterToMongo(*child_filter, column_name, column_type, objectid_columns);
-			// Extract conditions from child_doc and merge
 			for (auto it = child_doc.view().begin(); it != child_doc.view().end(); ++it) {
 				if (it->key() == column_name && it->type() == bsoncxx::type::k_document) {
-					// Merge nested document conditions
 					for (auto nested_it = it->get_document().value.begin(); nested_it != it->get_document().value.end();
 					     ++nested_it) {
 						merged_doc.append(bsoncxx::builder::basic::kvp(
@@ -263,7 +267,6 @@ static bsoncxx::document::value ConvertSingleFilterToMongo(const TableFilter &fi
 		break;
 	}
 	case TableFilterType::CONJUNCTION_OR: {
-		// For OR filters, use $or with each child condition
 		const auto &conj_filter = static_cast<const ConjunctionFilter &>(filter);
 		bsoncxx::builder::basic::array or_array;
 		for (const auto &child_filter : conj_filter.child_filters) {
@@ -276,20 +279,17 @@ static bsoncxx::document::value ConvertSingleFilterToMongo(const TableFilter &fi
 					continue;
 				}
 			}
-
 			auto child_doc = ConvertSingleFilterToMongo(*child_filter, column_name, column_type, objectid_columns);
 			if (!child_doc.view().empty()) {
 				or_array.append(child_doc.view());
 			}
 		}
-
 		if (!or_array.view().empty()) {
 			doc.append(bsoncxx::builder::basic::kvp("$or", or_array.extract()));
 		}
 		break;
 	}
 	case TableFilterType::STRUCT_EXTRACT: {
-		// StructFilter for nested field access - MongoDB supports via dot notation
 		const auto &struct_filter = filter.Cast<StructFilter>();
 		if (struct_filter.child_filter) {
 			string nested_path = column_name + "." + struct_filter.child_name;
@@ -298,7 +298,6 @@ static bsoncxx::document::value ConvertSingleFilterToMongo(const TableFilter &fi
 		break;
 	}
 	case TableFilterType::OPTIONAL_FILTER: {
-		// OptionalFilter wraps another filter (often IN filters from semi-join pushdown)
 		const auto &opt_filter = filter.Cast<OptionalFilter>();
 		if (opt_filter.child_filter) {
 			return ConvertSingleFilterToMongo(*opt_filter.child_filter, column_name, column_type, objectid_columns);
@@ -306,43 +305,40 @@ static bsoncxx::document::value ConvertSingleFilterToMongo(const TableFilter &fi
 		break;
 	}
 	case TableFilterType::DYNAMIC_FILTER: {
-		// DynamicFilter wraps a runtime-updatable filter.
 		const auto &dyn_filter = filter.Cast<DynamicFilter>();
 		if (!dyn_filter.filter_data || !dyn_filter.filter_data->initialized) {
 			break;
 		}
-#ifdef DUCKDB_MAIN_VECTOR_API
-		// DuckDB main: DynamicFilterData exposes comparison_type and constant directly.
-		ConstantFilter const_filter(dyn_filter.filter_data->comparison_type, dyn_filter.filter_data->constant);
-#else
-		// DuckDB v1.5.x: DynamicFilterData wraps a ConstantFilter.
 		if (!dyn_filter.filter_data->filter) {
 			break;
 		}
-		auto &const_filter = *dyn_filter.filter_data->filter;
-#endif
-		return ConvertSingleFilterToMongo(const_filter, column_name, column_type, objectid_columns);
+		return ConvertSingleFilterToMongo(*dyn_filter.filter_data->filter, column_name, column_type, objectid_columns);
 	}
+#endif // !DUCKDB_MAIN_VECTOR_API
 #ifdef DUCKDB_HAS_EXPRESSION_FILTER
 	case TableFilterType::EXPRESSION_FILTER: {
-		// DuckDB main wraps all scan filters in ExpressionFilter containing a BoundComparisonExpression.
-		// Extract the comparison type and constant, then delegate to the ConstantFilter path.
+		// DuckDB main wraps all scan filters in ExpressionFilter.
 		const auto &expr_filter = filter.Cast<ExpressionFilter>();
 		if (!expr_filter.expr) {
 			break;
 		}
+		// Skip optional/dynamic expression wrappers — we cannot guarantee their value at planning time.
+		if (ExpressionFilter::IsOptionalFilter(filter)) {
+			break;
+		}
 		auto &inner_expr = *expr_filter.expr;
 		// Handle comparison expressions (e.g., col = 5, col > 10).
-		if (inner_expr.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
-			auto &cmp = inner_expr.Cast<BoundComparisonExpression>();
-			// The constant can be on either side. Identify which side is the constant.
-			Expression *const_side = nullptr;
-			ExpressionType cmp_type = cmp.GetExpressionType();
-			if (cmp.right->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
-				const_side = cmp.right.get();
-			} else if (cmp.left->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
-				const_side = cmp.left.get();
-				// Flip the comparison direction when the constant is on the left.
+		// DuckDB main represents comparisons as BoundFunctionExpression; use BoundComparisonExpression helpers.
+		if (BoundComparisonExpression::IsComparison(inner_expr)) {
+			auto &cmp = inner_expr.Cast<BoundFunctionExpression>();
+			const Expression *const_side = nullptr;
+			ExpressionType cmp_type = inner_expr.GetExpressionType();
+			const Expression &right = BoundComparisonExpression::Right(cmp);
+			const Expression &left = BoundComparisonExpression::Left(cmp);
+			if (right.GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
+				const_side = &right;
+			} else if (left.GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
+				const_side = &left;
 				switch (cmp_type) {
 				case ExpressionType::COMPARE_LESSTHAN:
 					cmp_type = ExpressionType::COMPARE_GREATERTHAN;
@@ -362,15 +358,13 @@ static bsoncxx::document::value ConvertSingleFilterToMongo(const TableFilter &fi
 			}
 			if (const_side) {
 				auto &const_expr = const_side->Cast<BoundConstantExpression>();
-				ConstantFilter const_filter(cmp_type, const_expr.value);
-				return ConvertSingleFilterToMongo(const_filter, column_name, column_type, objectid_columns);
+				return BuildComparisonFilterDoc(cmp_type, const_expr.value, column_name, column_type, objectid_columns);
 			}
 		}
 		// Handle conjunction expressions (AND / OR).
 		if (inner_expr.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 			auto &conj = inner_expr.Cast<BoundConjunctionExpression>();
 			if (conj.GetExpressionType() == ExpressionType::CONJUNCTION_AND) {
-				// Recursively convert each child and merge into a single AND document.
 				bsoncxx::builder::basic::document merged_doc;
 				for (auto &child : conj.children) {
 					ExpressionFilter child_ef(child->Copy());
@@ -423,7 +417,7 @@ static bsoncxx::document::value ConvertSingleFilterToMongo(const TableFilter &fi
 		}
 		break;
 	}
-#endif
+#endif // DUCKDB_HAS_EXPRESSION_FILTER
 	default:
 		break;
 	}

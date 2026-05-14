@@ -365,7 +365,7 @@ unique_ptr<LocalTableFunctionState> MongoScanInitLocal(ExecutionContext &context
 		MongoForEachFilter(*input.filters, [&](idx_t col_idx, TableFilter &filter) {
 			auto it = filter_index_map.find(col_idx);
 			if (it != filter_index_map.end()) {
-				MongoSetFilter(*remapped_filters, it->second, filter.Copy());
+				MongoSetFilter(*remapped_filters, it->second, MongoCopyFilter(filter));
 			}
 		});
 

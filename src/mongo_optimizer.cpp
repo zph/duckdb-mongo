@@ -136,7 +136,7 @@ static bsoncxx::document::value BuildMatchFromExistingFilters(const LogicalGet &
 		MongoForEachFilter(*filters_copy, [&](idx_t proj_idx, TableFilter &filter) {
 			if (proj_idx < col_ids.size()) {
 				idx_t schema_idx = col_ids[proj_idx].GetPrimaryIndex();
-				MongoSetFilter(*remapped_filters, schema_idx, filter.Copy());
+				MongoSetFilter(*remapped_filters, schema_idx, MongoCopyFilter(filter));
 			}
 		});
 		auto *filters_to_use = remapped_filters.get();
@@ -271,7 +271,7 @@ static bool IsSupportedAggregate(const BoundAggregateExpression &aggr, const Log
 		return false;
 	}
 
-	auto fname = StringUtil::Lower(aggr.function.name);
+	auto fname = StringUtil::Lower(MONGO_FUNCTION_NAME(aggr.function));
 	if (fname == "count_star") {
 		out_kind = "count_star";
 		out_child_col = DConstants::INVALID_INDEX;
