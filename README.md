@@ -58,6 +58,7 @@ SELECT * FROM atlas_db.mydb.mycollection;
   - Projections (SELECT columns)
   - Limits and TopN (ORDER BY _id LIMIT N)
   - Aggregations (COUNT, SUM, MIN, MAX, AVG with GROUP BY)
+- **Operation time tracking**: Access MongoDB's `operationTime` via scalar functions for consistency guarantees
 - Read-only (write support may be added)
 
 ## Installation
@@ -558,6 +559,67 @@ SELECT * FROM mongo_scan(
   - The 2D array `[[1,2], [3,4]]` is automatically wrapped to `[[[1,2]], [[3,4]]]` to match the 3D schema
   - Both documents return valid LIST values that can be queried using DuckDB's LIST functions
 - This ensures data is preserved and queryable even when array structures vary across documents
+
+### Operation Time Tracking
+
+After each `mongo_scan` completes, the extension captures MongoDB's
+[`operationTime`](https://www.mongodb.com/docs/manual/reference/command/hello/#std-label-hello-operationTime)
+from the server response. This is useful for:
+
+- **Causal consistency**: passing the operation time to downstream reads so they see at least the data from this query
+- **Change tracking**: knowing exactly when MongoDB observed the operation
+- **Debugging**: correlating DuckDB queries with MongoDB's oplog
+
+Three scalar functions expose this value at different levels of detail:
+
+| Function | Return Type | Description |
+|----------|-------------|-------------|
+| `mongo_operation_time()` | `UBIGINT` | Raw BSON timestamp (upper 32 bits = epoch seconds, lower 32 bits = ordinal increment) |
+| `mongo_operation_timestamp()` | `TIMESTAMP` | Human-readable timestamp (epoch seconds portion) |
+| `mongo_operation_increment()` | `UINTEGER` | Ordinal increment within that second |
+
+All three return `NULL` if no `mongo_scan` has executed on the current connection yet.
+
+**Examples:**
+
+```sql
+-- Run a query
+SELECT * FROM mongo_scan('mongodb://localhost:27017', 'mydb', 'orders');
+
+-- Get the human-readable timestamp of the operation
+SELECT mongo_operation_timestamp();
+-- 2026-05-18 14:32:07
+
+-- Get the increment (distinguishes operations within the same second)
+SELECT mongo_operation_increment();
+-- 3
+
+-- Get the raw BSON timestamp for passing to other MongoDB tools
+SELECT mongo_operation_time();
+-- 7523849283940007939
+
+-- Compare two successive operations
+SELECT mongo_operation_time() AS before_time;
+SELECT * FROM mongo_scan('mongodb://localhost:27017', 'mydb', 'orders', filter := '{"status": "shipped"}');
+SELECT mongo_operation_time() AS after_time;
+```
+
+**Comparing operation times:** The raw `UBIGINT` from `mongo_operation_time()` is directly
+comparable with `>`, `<`, `=` — a larger value means a later (or equal-second-but-higher-ordinal)
+operation. This works because the epoch seconds occupy the upper 32 bits, so chronological order
+is preserved in integer comparison.
+
+```sql
+-- Store a checkpoint, run a query, then verify the operation moved forward
+CREATE TEMP TABLE checkpoint AS SELECT mongo_operation_time() AS ts;
+SELECT * FROM mongo_scan('mongodb://localhost:27017', 'mydb', 'events');
+SELECT mongo_operation_time() >= (SELECT ts FROM checkpoint) AS moved_forward;
+-- true
+```
+
+> **Scope:** The operation time is stored per-connection (per DuckDB `ClientContext`). Concurrent
+> connections each track their own value. The value reflects the *last completed* `mongo_scan` on
+> that connection.
 
 ### Limitations
 

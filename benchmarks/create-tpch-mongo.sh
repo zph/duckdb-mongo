@@ -64,15 +64,27 @@ echo "TPC-H data generated successfully ($REGION_COUNT regions)"
 echo ""
 echo "=== Loading TPC-H data into MongoDB ==="
 
-# Check if mongosh is available
-if ! command -v mongosh &> /dev/null; then
-    echo "Error: mongosh is not installed. Please install MongoDB shell."
-    echo "On macOS: brew install mongosh"
+# Determine which shell binary to use.
+# Priority: MONGO_SHELL env var > mongosh > mongo (legacy)
+if [ -n "${MONGO_SHELL:-}" ]; then
+    if ! command -v "$MONGO_SHELL" &> /dev/null; then
+        echo "Error: MONGO_SHELL is set to '$MONGO_SHELL' but it was not found in PATH."
+        exit 1
+    fi
+elif command -v mongosh &> /dev/null; then
+    MONGO_SHELL=mongosh
+elif command -v mongo &> /dev/null; then
+    MONGO_SHELL=mongo
+else
+    echo "Error: No MongoDB shell found. Install mongosh (recommended) or mongo (legacy)."
+    echo "  On macOS: brew install mongosh"
+    echo "  Or set MONGO_SHELL=/path/to/your/shell"
     exit 1
 fi
+echo "Using MongoDB shell: $MONGO_SHELL"
 
 # Drop and create database
-mongosh "mongodb://$MONGO_HOST:$MONGO_PORT/$MONGO_DB" --eval "
+"$MONGO_SHELL" "mongodb://$MONGO_HOST:$MONGO_PORT/$MONGO_DB" --eval "
 db.dropDatabase();
 print('Database $MONGO_DB dropped and will be recreated');
 "
@@ -180,7 +192,7 @@ print(f"Inserted {total} documents into ${table}", flush=True)
 PYTHON_SCRIPT
     else
         # For smaller tables, use mongosh
-        mongosh "mongodb://$MONGO_HOST:$MONGO_PORT/$MONGO_DB" --eval "
+        "$MONGO_SHELL" "mongodb://$MONGO_HOST:$MONGO_PORT/$MONGO_DB" --eval "
         const fs = require('fs');
         const csv = fs.readFileSync('$CSV_FILE', 'utf-8');
         const lines = csv.trim().split('\\n');
@@ -275,7 +287,7 @@ echo ""
 echo "=== Creating indexes ==="
 
 # Create indexes similar to what would be in Postgres
-mongosh "mongodb://$MONGO_HOST:$MONGO_PORT/$MONGO_DB" --eval "
+"$MONGO_SHELL" "mongodb://$MONGO_HOST:$MONGO_PORT/$MONGO_DB" --eval "
 // Indexes for lineitem (most queried table)
 db.lineitem.createIndex({l_orderkey: 1});
 db.lineitem.createIndex({l_partkey: 1});
