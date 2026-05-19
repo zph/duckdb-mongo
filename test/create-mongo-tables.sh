@@ -8,17 +8,28 @@ MONGO_HOST=${MONGO_HOST:-localhost}
 MONGO_PORT=${MONGO_PORT:-27017}
 MONGO_DB=${MONGO_DB:-duckdb_mongo_test}
 
-echo "Creating test MongoDB database: $MONGO_DB"
-
-# Check if mongosh is available
-if ! command -v mongosh &> /dev/null; then
-    echo "Error: mongosh is not installed. Please install MongoDB shell."
-    echo "On macOS: brew install mongosh"
+# Determine which shell binary to use.
+# Priority: MONGO_SHELL env var > mongosh > mongo (legacy)
+if [ -n "${MONGO_SHELL:-}" ]; then
+    if ! command -v "$MONGO_SHELL" &> /dev/null; then
+        echo "Error: MONGO_SHELL is set to '$MONGO_SHELL' but it was not found in PATH."
+        exit 1
+    fi
+elif command -v mongosh &> /dev/null; then
+    MONGO_SHELL=mongosh
+elif command -v mongo &> /dev/null; then
+    MONGO_SHELL=mongo
+else
+    echo "Error: No MongoDB shell found. Install mongosh (recommended) or mongo (legacy)."
+    echo "  On macOS: brew install mongosh"
+    echo "  Or set MONGO_SHELL=/path/to/your/shell"
     exit 1
 fi
 
+echo "Creating test MongoDB database: $MONGO_DB (using $MONGO_SHELL)"
+
 # Create test database and collections with sample data
-mongosh "mongodb://$MONGO_HOST:$MONGO_PORT/$MONGO_DB" --eval "
+"$MONGO_SHELL" "mongodb://$MONGO_HOST:$MONGO_PORT/$MONGO_DB" --eval "
 // Drop database if it exists
 db.dropDatabase();
 
@@ -28,7 +39,7 @@ db.users.insertMany([
     _id: ObjectId('507f1f77bcf86cd799439011'),
     name: 'Alice',
     email: 'alice@example.com',
-    age: 30,
+    age: NumberInt(30),
     active: true,
     balance: 1000.50,
     tags: ['admin', 'user'],
@@ -44,7 +55,7 @@ db.users.insertMany([
     _id: ObjectId('507f1f77bcf86cd799439012'),
     name: 'Bob',
     email: 'bob@example.com',
-    age: 25,
+    age: NumberInt(25),
     active: false,
     balance: 500.25,
     tags: ['user'],
@@ -60,7 +71,7 @@ db.users.insertMany([
     _id: ObjectId('507f1f77bcf86cd799439013'),
     name: 'Charlie',
     email: 'charlie@example.com',
-    age: 35,
+    age: NumberInt(35),
     active: true,
     balance: 2000.75,
     tags: ['admin', 'premium'],
@@ -75,7 +86,7 @@ db.users.insertMany([
   {
     name: 'Diana',
     email: 'diana@example.com',
-    age: 28,
+    age: NumberInt(28),
     active: true,
     balance: 750.00,
     tags: ['user'],
@@ -96,7 +107,7 @@ db.products.insertMany([
     category: 'Electronics',
     price: 999.99,
     in_stock: true,
-    quantity: 50,
+    quantity: NumberInt(50),
     specs: {
       cpu: 'Intel i7',
       ram: '16GB',
@@ -109,10 +120,10 @@ db.products.insertMany([
     category: 'Electronics',
     price: 29.99,
     in_stock: true,
-    quantity: 200,
+    quantity: NumberInt(200),
     specs: {
       type: 'Wireless',
-      dpi: 1600
+      dpi: NumberInt(1600)
     },
     tags: ['computer', 'accessories']
   },
@@ -121,13 +132,13 @@ db.products.insertMany([
     category: 'Furniture',
     price: 299.99,
     in_stock: false,
-    quantity: 0,
+    quantity: NumberInt(0),
     specs: {
       material: 'Wood',
       dimensions: {
-        width: 120,
-        height: 75,
-        depth: 60
+        width: NumberInt(120),
+        height: NumberInt(75),
+        depth: NumberInt(60)
       }
     },
     tags: ['furniture', 'office']
@@ -139,17 +150,17 @@ db.matrix.insertMany([
   {
     _id: 'MAT-001',
     name: '2D Matrix',
-    data: [[1, 2, 3], [4, 5, 6], [7, 8, 9]]
+    data: [[NumberInt(1), NumberInt(2), NumberInt(3)], [NumberInt(4), NumberInt(5), NumberInt(6)], [NumberInt(7), NumberInt(8), NumberInt(9)]]
   },
   {
     _id: 'MAT-002',
     name: '3D Matrix',
-    data: [[[1, 2], [3, 4]], [[5, 6], [7, 8]]]
+    data: [[[NumberInt(1), NumberInt(2)], [NumberInt(3), NumberInt(4)]], [[NumberInt(5), NumberInt(6)], [NumberInt(7), NumberInt(8)]]]
   },
   {
     _id: 'MAT-003',
     name: 'Mixed Matrix',
-    data: [[10, 20], [30, 40], [50, 60]]
+    data: [[NumberInt(10), NumberInt(20)], [NumberInt(30), NumberInt(40)], [NumberInt(50), NumberInt(60)]]
   }
 ]);
 
@@ -159,8 +170,8 @@ db.orders.insertMany([
     order_id: 'ORD-001',
     customer_id: ObjectId('507f1f77bcf86cd799439011'),
     items: [
-      { product: 'Laptop', quantity: 1, price: 999.99 },
-      { product: 'Mouse', quantity: 2, price: 29.99 }
+      { product: 'Laptop', quantity: NumberInt(1), price: 999.99 },
+      { product: 'Mouse', quantity: NumberInt(2), price: 29.99 }
     ],
     total: 1059.97,
     status: 'completed',
@@ -170,7 +181,7 @@ db.orders.insertMany([
     order_id: 'ORD-002',
     customer_id: ObjectId('507f1f77bcf86cd799439012'),
     items: [
-      { product: 'Desk', quantity: 1, price: 299.99 }
+      { product: 'Desk', quantity: NumberInt(1), price: 299.99 }
     ],
     total: 299.99,
     status: 'pending',
@@ -188,7 +199,7 @@ db.orders.insertMany([
     order_id: 'ORD-004',
     customer_id: ObjectId('507f1f77bcf86cd799439011'),
     items: [
-      { product: 'Keyboard', quantity: 1 }
+      { product: 'Keyboard', quantity: NumberInt(1) }
     ],
     notes: ['urgent', 'gift'],
     total: 79.99,
@@ -210,7 +221,7 @@ db.createCollection('empty_collection');
 // Create collection with type conflicts (same field, different types)
 db.type_conflicts.insertMany([
   { id: '123', value: 'string' },
-  { id: 456, value: 789 },
+  { id: NumberInt(456), value: NumberInt(789) },
   { id: true, value: false }
 ]);
 
@@ -241,7 +252,7 @@ db.nested_scalars_test.insertMany([
       Object: {
         Child: {
           String: 'test_value',
-          Int: 42,
+          Int: NumberInt(42),
           Bool: true,
           Date: new Date('2023-01-01T00:00:00Z')
         }
@@ -254,7 +265,7 @@ db.nested_scalars_test.insertMany([
       Level2: {
         Level3: {
           Value: 'nested_value',
-          Number: 100
+          Number: NumberInt(100)
         }
       }
     }
@@ -265,7 +276,7 @@ db.nested_scalars_test.insertMany([
       Object: {
         Child: {
           String: 'another_value',
-          Int: 100,
+          Int: NumberInt(100),
           Bool: false,
           Date: new Date('2023-02-01T00:00:00Z'),
           OptionalField: 'optional_value'
@@ -279,7 +290,7 @@ db.nested_scalars_test.insertMany([
       Object: {
         Child: {
           String: null,
-          Int: 0,
+          Int: NumberInt(0),
           Bool: false
         }
       }
@@ -302,7 +313,7 @@ db.object_container_test.insertMany([
       argyle_ref_id: '67925122ce9bc35b1fc9a268',
       argyle_case_id: '67925121265c4cf36d72f6e2',
       tkient_code: 'dummy',
-      tkient_id: 0,
+      tkient_id: NumberInt(0),
       status: 'completed-success',
       client_code: 'TEST001',
       client_id: '12345',
@@ -312,7 +323,7 @@ db.object_container_test.insertMany([
         pratfall_id: 'ipsum'
       },
       case_metadata: {
-        case_count: 0,
+        case_count: NumberInt(0),
         argyled_flag: 'lorem',
         input_file_name: 'lorem'
       }
@@ -329,7 +340,7 @@ db.object_container_test.insertMany([
     case_type: 'bulk',
     case_data: {
       client_code: 'mrc',
-      client_id: 12322
+      client_id: NumberInt(12322)
     }
   }
 ]);
@@ -340,19 +351,19 @@ db.string_id_test.insertMany([
   {
     _id: 'aaaaaaaaaaaaaaaaaaaaaaaa',
     name: 'Doc1',
-    value: 100,
+    value: NumberInt(100),
     ref_id: 'bbbbbbbbbbbbbbbbbbbbbbbb'
   },
   {
     _id: 'bbbbbbbbbbbbbbbbbbbbbbbb',
     name: 'Doc2',
-    value: 200,
+    value: NumberInt(200),
     ref_id: 'aaaaaaaaaaaaaaaaaaaaaaaa'
   },
   {
     _id: 'cccccccccccccccccccccccc',
     name: 'Doc3',
-    value: 300,
+    value: NumberInt(300),
     ref_id: 'aaaaaaaaaaaaaaaaaaaaaaaa'
   }
 ]);
@@ -365,13 +376,13 @@ db.schema_test_simple.insertMany([
   {
     _id: ObjectId('507f1f77bcf86cd799439011'),
     name: 'Alice',
-    age: 30,
+    age: NumberInt(30),
     email: 'alice@example.com'
   },
   {
     _id: ObjectId('507f1f77bcf86cd799439012'),
     name: 'Bob',
-    age: 25,
+    age: NumberInt(25),
     email: 'bob@example.com'
   }
 ]);
@@ -476,7 +487,7 @@ db.schema_test_types.insertMany([
   {
     _id: ObjectId('507f1f77bcf86cd799439011'),
     name: 'TypeTest',
-    count: 42,
+    count: NumberInt(42),
     price: 99.99,
     active: true,
     created: new Date('2023-01-01T00:00:00Z')
