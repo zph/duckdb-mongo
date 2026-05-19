@@ -1053,62 +1053,56 @@ Contributions are welcome! Please open an issue or submit a pull request.
 ### Building from Source
 
 **Prerequisites:**
-- CMake 3.5 or higher
-- C++ compiler with C++17 support
-- vcpkg (for dependency management)
+- CMake 3.5+
+- C++ compiler with C++17 support (Xcode Command Line Tools on macOS, GCC 7+ on Linux)
+- Git
+
+vcpkg and all MongoDB driver dependencies are vendored — no external package manager setup needed.
 
 **Build Steps:**
 
-1. Clone the repository with submodules:
 ```sh
+# 1. Clone with submodules (includes DuckDB v1.5.2 and vendored vcpkg)
 git clone --recurse-submodules https://github.com/stephaniewang526/duckdb-mongo.git
 cd duckdb-mongo
-```
 
-2. Set up vcpkg (if not already done):
-```shell
-git clone https://github.com/Microsoft/vcpkg.git
-cd vcpkg
-./bootstrap-vcpkg.sh  # On Windows: .\bootstrap-vcpkg.bat
-export VCPKG_TOOLCHAIN_PATH=`pwd`/scripts/buildsystems/vcpkg.cmake
-```
+# 2. Build (first build takes ~5 min; vcpkg auto-installs MongoDB drivers)
+#    OVERRIDE_GIT_DESCRIBE ensures the extension version matches DuckDB v1.5.2
+OVERRIDE_GIT_DESCRIBE=v1.5.2 make release
 
-3. Install dependencies (first time only):
-```sh
-# Install MongoDB C++ driver via vcpkg
-../vcpkg/vcpkg install --triplet arm64-osx  # or x64-osx for Intel Mac
-```
-
-4. Build the extension:
-```sh
-# Set vcpkg environment
-export VCPKG_TOOLCHAIN_PATH=../vcpkg/scripts/buildsystems/vcpkg.cmake
-export VCPKG_TARGET_TRIPLET=arm64-osx  # or x64-osx for Intel Mac
-
-# Build
-make release
-```
-
-Or use the build script:
-```sh
-bash scripts/build.sh
+# 3. Verify
+./build/release/duckdb -c "SELECT extension_name FROM duckdb_extensions() WHERE loaded"
 ```
 
 **Built binaries:**
-- `./build/release/duckdb` - DuckDB shell with the extension pre-loaded
-- `./build/release/test/unittest` - Test runner
-- `./build/release/extension/mongo/mongo.duckdb_extension` - Loadable extension binary
 
-### Loading the Extension (Development)
+| File | Description |
+|------|-------------|
+| `./build/release/duckdb` | DuckDB shell with the extension pre-loaded |
+| `./build/release/extension/mongo/mongo.duckdb_extension` | Loadable extension binary |
+| `./build/release/test/unittest` | Test runner |
 
+### Loading the Extension
+
+**Using the bundled DuckDB shell** (extension auto-loaded):
 ```sh
-./build/release/duckdb  # Extension auto-loaded
+./build/release/duckdb
 ```
 
-Or load explicitly:
-```sql
-LOAD '/path/to/mongo.duckdb_extension';
+**Using your system DuckDB** (must match the build version, currently v1.5.2):
+```sh
+duckdb -unsigned -cmd "LOAD '/path/to/build/release/extension/mongo/mongo.duckdb_extension'"
 ```
+
+> The `-unsigned` flag is required because the extension is not signed for distribution.
+> Without it, use `SET allow_unsigned_extensions=true;` before `LOAD`.
+
+**Incremental rebuilds** (after editing extension code only):
+```sh
+cmake --build build/release --config Release --target mongo_loadable_extension
+```
+
+This skips rebuilding DuckDB and only recompiles changed extension files (~10 seconds).
 
 ### Building for MongoDB 3.6 (Legacy Driver)
 
@@ -1119,7 +1113,7 @@ The default build requires **MongoDB 4.2+**. To target **MongoDB 3.6+**, build w
 rm -rf build/release
 
 # Build with legacy drivers
-make release-legacy
+OVERRIDE_GIT_DESCRIBE=v1.5.2 make release-legacy
 ```
 
 This uses vcpkg overlay ports in `vendor/vcpkg/ports-legacy/` to swap in the older driver versions. The extension API and behavior are identical — only the minimum MongoDB version changes.
