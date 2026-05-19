@@ -1110,6 +1110,27 @@ Or load explicitly:
 LOAD '/path/to/mongo.duckdb_extension';
 ```
 
+### Building for MongoDB 3.6 (Legacy Driver)
+
+The default build requires **MongoDB 4.2+**. To target **MongoDB 3.6+**, build with the legacy driver stack (mongocxx 3.10.2 / libmongoc 1.27.6):
+
+```sh
+# Clean any previous build (required when switching driver versions)
+rm -rf build/release
+
+# Build with legacy drivers
+make release-legacy
+```
+
+This uses vcpkg overlay ports in `vendor/vcpkg/ports-legacy/` to swap in the older driver versions. The extension API and behavior are identical — only the minimum MongoDB version changes.
+
+| Build Target | Driver Stack | Min MongoDB |
+|---|---|---|
+| `make release` | mongocxx 4.3.0 / libmongoc 2.3.0 | 4.2 |
+| `make release-legacy` | mongocxx 3.10.2 / libmongoc 1.27.6 | 3.6 |
+
+> **Note:** You must clean `build/release/` when switching between default and legacy builds because vcpkg caches the installed driver packages.
+
 ### Running Tests
 
 ```sh
