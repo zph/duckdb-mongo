@@ -4,9 +4,12 @@
 #include "mongo_storage_extension.hpp"
 #include "mongo_instance.hpp"
 #include "mongo_table_function.hpp"
+#include "mongo_operation_state.hpp"
 #include "mongo_expr_pushdown.hpp"
 #include "mongo_optimizer.hpp"
 #include "mongo_secrets.hpp"
+#include "duckdb/function/scalar_function.hpp"
+#include "duckdb/common/types/timestamp.hpp"
 #include "duckdb/function/table_function.hpp"
 #include "duckdb/main/config.hpp"
 #if __has_include("duckdb/main/extension_callback_manager.hpp")
@@ -108,6 +111,76 @@ static void LoadInternal(ExtensionLoader &loader) {
 	CreateSecretFunction mongo_secret_function = {"mongo", "config", CreateMongoSecretFunction};
 	SetMongoSecretParameters(mongo_secret_function);
 	loader.RegisterFunction(mongo_secret_function);
+
+	// Register mongo_operation_time() scalar function
+	// Returns the BSON timestamp (as UBIGINT) from the most recent mongo_scan on this connection.
+	// Upper 32 bits = seconds since epoch, lower 32 bits = ordinal increment.
+	ScalarFunction op_time_func("mongo_operation_time", {}, LogicalType::UBIGINT,
+	                            [](DataChunk &args, ExpressionState &state, Vector &result) {
+		                            result.SetVectorType(VectorType::CONSTANT_VECTOR);
+		                            if (!state.HasContext()) {
+			                            ConstantVector::SetNull(result, true);
+			                            return;
+		                            }
+		                            auto &context = state.GetContext();
+		                            auto op_state =
+		                                context.registered_state->Get<MongoOperationState>(MongoOperationState::STATE_KEY);
+		                            uint64_t ts;
+		                            if (op_state && op_state->GetOperationTime(ts)) {
+			                            ConstantVector::GetData<uint64_t>(result)[0] = ts;
+			                            ConstantVector::SetNull(result, false);
+		                            } else {
+			                            ConstantVector::SetNull(result, true);
+		                            }
+	                            });
+	loader.RegisterFunction(op_time_func);
+
+	// Register mongo_operation_timestamp() — human-readable TIMESTAMP from the operation time.
+	// Extracts the upper 32 bits (epoch seconds) and converts to a DuckDB TIMESTAMP.
+	ScalarFunction op_ts_func("mongo_operation_timestamp", {}, LogicalType::TIMESTAMP,
+	                          [](DataChunk &args, ExpressionState &state, Vector &result) {
+		                          result.SetVectorType(VectorType::CONSTANT_VECTOR);
+		                          if (!state.HasContext()) {
+			                          ConstantVector::SetNull(result, true);
+			                          return;
+		                          }
+		                          auto &context = state.GetContext();
+		                          auto op_state =
+		                              context.registered_state->Get<MongoOperationState>(MongoOperationState::STATE_KEY);
+		                          uint64_t ts;
+		                          if (op_state && op_state->GetOperationTime(ts)) {
+			                          int64_t epoch_seconds = static_cast<int64_t>(ts >> 32);
+			                          ConstantVector::GetData<timestamp_t>(result)[0] =
+			                              Timestamp::FromEpochSeconds(epoch_seconds);
+			                          ConstantVector::SetNull(result, false);
+		                          } else {
+			                          ConstantVector::SetNull(result, true);
+		                          }
+	                          });
+	loader.RegisterFunction(op_ts_func);
+
+	// Register mongo_operation_increment() — the ordinal increment within the second.
+	// Useful for distinguishing multiple operations that occurred in the same second.
+	ScalarFunction op_inc_func("mongo_operation_increment", {}, LogicalType::UINTEGER,
+	                           [](DataChunk &args, ExpressionState &state, Vector &result) {
+		                           result.SetVectorType(VectorType::CONSTANT_VECTOR);
+		                           if (!state.HasContext()) {
+			                           ConstantVector::SetNull(result, true);
+			                           return;
+		                           }
+		                           auto &context = state.GetContext();
+		                           auto op_state =
+		                               context.registered_state->Get<MongoOperationState>(MongoOperationState::STATE_KEY);
+		                           uint64_t ts;
+		                           if (op_state && op_state->GetOperationTime(ts)) {
+			                           ConstantVector::GetData<uint32_t>(result)[0] =
+			                               static_cast<uint32_t>(ts & 0xFFFFFFFF);
+			                           ConstantVector::SetNull(result, false);
+		                           } else {
+			                           ConstantVector::SetNull(result, true);
+		                           }
+	                           });
+	loader.RegisterFunction(op_inc_func);
 
 	// Register MongoDB storage extension for ATTACH support
 	auto &db = loader.GetDatabaseInstance();

@@ -1,0 +1,94 @@
+# name: test/sql/query/operation_time.test
+# description: Test mongo_operation_time() and helper functions
+# group: [query]
+
+require mongo
+
+# Test that all three functions exist
+query I
+SELECT COUNT(*) FROM duckdb_functions()
+WHERE function_name IN ('mongo_operation_time', 'mongo_operation_timestamp', 'mongo_operation_increment')
+  AND function_type = 'scalar';
+----
+3
+
+# Before any scan, all should return NULL
+query I
+SELECT mongo_operation_time() IS NULL;
+----
+true
+
+query I
+SELECT mongo_operation_timestamp() IS NULL;
+----
+true
+
+query I
+SELECT mongo_operation_increment() IS NULL;
+----
+true
+
+# Test with actual MongoDB (requires test database)
+require-env MONGODB_TEST_DATABASE_AVAILABLE
+
+statement ok
+ATTACH 'host=localhost port=27017 dbname=duckdb_mongo_test' AS mongo_test (TYPE MONGO);
+
+# Scan should succeed
+query I
+SELECT COUNT(*) FROM mongo_test.users;
+----
+4
+
+# operation_time should be a UBIGINT (raw BSON timestamp)
+query I
+SELECT typeof(mongo_operation_time());
+----
+UBIGINT
+
+# operation_timestamp should be a TIMESTAMP (human-readable)
+query I
+SELECT typeof(mongo_operation_timestamp());
+----
+TIMESTAMP
+
+# operation_increment should be a UINTEGER
+query I
+SELECT typeof(mongo_operation_increment());
+----
+UINTEGER
+
+# On replica set / sharded cluster: operationTime is non-NULL and valid.
+# On standalone servers (e.g. MongoDB 3.6 standalone): operationTime is not
+# tracked by the server, so all three functions remain NULL after a scan.
+# The following tests verify consistency regardless of server topology.
+
+# The raw value should decompose correctly (if non-NULL):
+# upper 32 bits should equal epoch_seconds(timestamp), lower 32 should equal increment.
+# On standalone, both sides of the equality are NULL, which is still consistent.
+query I
+SELECT mongo_operation_time() IS NULL
+    OR epoch(mongo_operation_timestamp()) = (mongo_operation_time() >> 32)::BIGINT;
+----
+true
+
+query I
+SELECT mongo_operation_time() IS NULL
+    OR mongo_operation_increment() = (mongo_operation_time() & 4294967295)::UINTEGER;
+----
+true
+
+# After another scan, values should still be consistent
+query I
+SELECT COUNT(*) FROM mongo_test.users WHERE age > 25;
+----
+3
+
+query I
+SELECT mongo_operation_time() IS NULL
+    OR mongo_operation_timestamp() > TIMESTAMP '2020-01-01';
+----
+true
+
+statement ok
+DETACH mongo_test;

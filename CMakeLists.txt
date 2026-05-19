@@ -7,6 +7,15 @@ set(TARGET_NAME mongo)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# @spec DRVCOMPAT-BUILD-001, DRVCOMPAT-BUILD-002, DRVCOMPAT-BUILD-003
+# Build-time selection between mongocxx 4.x (default) and 3.x (legacy, MongoDB 3.6+ support).
+option(MONGOCXX_LEGACY "Build with mongocxx 3.x / libmongoc 1.x for MongoDB 3.6+ support" OFF)
+if(MONGOCXX_LEGACY)
+    add_compile_definitions(MONGOCXX_LEGACY)
+    # Use legacy overlay ports (mongocxx 3.10.2 / libmongoc 1.27.6)
+    set(VCPKG_OVERLAY_PORTS "${CMAKE_CURRENT_SOURCE_DIR}/vendor/vcpkg/ports-legacy")
+endif()
+
 # DuckDB's extension distribution supports vcpkg. As such, dependencies can be added in ./vcpkg.json and then
 # used in cmake with find_package. Feel free to remove or replace with other dependencies.
 # Note that it should also be removed from vcpkg.json to prevent needlessly installing it..

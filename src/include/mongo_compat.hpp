@@ -1,7 +1,10 @@
 #pragma once
 
-// Compatibility layer for DuckDB v1.5.x vs main branch API differences.
-// Uses __has_include to detect the target DuckDB version at compile time.
+// Compatibility layer for:
+// 1. DuckDB v1.5.x vs main branch API differences (auto-detected via __has_include)
+// 2. MongoDB driver version: mongocxx 4.x (default) vs 3.x (legacy, -DMONGOCXX_LEGACY=ON)
+//
+// @spec DRVCOMPAT-COMPAT-003
 
 #include "duckdb/common/types/vector.hpp"
 #include "duckdb/planner/table_filter.hpp"
@@ -127,3 +130,13 @@ inline const Expression &MongoComparisonRight(const Expression &expr) {
 #endif
 
 } // namespace duckdb
+
+// --- MongoDB driver compatibility (mongocxx 4.x vs 3.x) ---
+// The codebase already uses the 3.x-compatible .value accessor pattern
+// (e.g., get_string().value, get_int32().value, get_document().value),
+// which works identically in both 3.x and 4.x.
+//
+// Add any driver-version-specific workarounds below as needed.
+#ifdef MONGOCXX_LEGACY
+// mongocxx 3.x / libmongoc 1.x (MongoDB 3.6+ support)
+#endif

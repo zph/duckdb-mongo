@@ -2,6 +2,7 @@
 
 #include "duckdb.hpp"
 #include <mongocxx/client.hpp>
+#include <mongocxx/client_session.hpp>
 #include <mongocxx/instance.hpp>
 #include <bsoncxx/document/view.hpp>
 #include <bsoncxx/builder/stream/document.hpp>
@@ -70,6 +71,8 @@ struct MongoScanState : public LocalTableFunctionState {
 	std::string filter_query;
 	std::string pipeline_json;
 	int64_t limit = -1;
+	// Client session for tracking operationTime from MongoDB responses
+	unique_ptr<mongocxx::client_session> session;
 	unique_ptr<mongocxx::cursor> cursor;
 	unique_ptr<mongocxx::cursor::iterator> current;
 	unique_ptr<mongocxx::cursor::iterator> end;

@@ -3,6 +3,7 @@
 #include "mongo_filter_pushdown.hpp"
 #include "mongo_compat.hpp"
 #include "mongo_secrets.hpp"
+#include "mongo_operation_state.hpp"
 #include "duckdb/common/types/timestamp.hpp"
 #include "duckdb/common/types/date.hpp"
 #include "duckdb/common/types/time.hpp"
@@ -316,6 +317,15 @@ unique_ptr<LocalTableFunctionState> MongoScanInitLocal(ExecutionContext &context
 		}
 	}
 
+	// Start a client session to track operationTime from MongoDB responses.
+	// Standalone MongoDB servers (pre-4.0 or non-replica-set) may not support sessions.
+	try {
+		result->session = make_uniq<mongocxx::client_session>(result->connection->client.start_session());
+	} catch (...) {
+		// Session not supported — operationTime tracking will be unavailable.
+		result->session = nullptr;
+	}
+
 	// Get collection
 	auto db = result->connection->client[result->database_name];
 	auto collection = db[result->collection_name];
@@ -359,7 +369,11 @@ unique_ptr<LocalTableFunctionState> MongoScanInitLocal(ExecutionContext &context
 		}
 
 		mongocxx::options::aggregate agg_opts;
-		result->cursor = make_uniq<mongocxx::cursor>(collection.aggregate(pipeline, agg_opts));
+		if (result->session) {
+			result->cursor = make_uniq<mongocxx::cursor>(collection.aggregate(*result->session, pipeline, agg_opts));
+		} else {
+			result->cursor = make_uniq<mongocxx::cursor>(collection.aggregate(pipeline, agg_opts));
+		}
 		result->current = make_uniq<mongocxx::cursor::iterator>(result->cursor->begin());
 		result->end = make_uniq<mongocxx::cursor::iterator>(result->cursor->end());
 		return std::move(result);
@@ -595,7 +609,11 @@ unique_ptr<LocalTableFunctionState> MongoScanInitLocal(ExecutionContext &context
 	}
 
 	// Create cursor with query filter and options (including projection if set)
-	result->cursor = make_uniq<mongocxx::cursor>(collection.find(query_filter, opts));
+	if (result->session) {
+		result->cursor = make_uniq<mongocxx::cursor>(collection.find(*result->session, query_filter, opts));
+	} else {
+		result->cursor = make_uniq<mongocxx::cursor>(collection.find(query_filter, opts));
+	}
 	result->current = make_uniq<mongocxx::cursor::iterator>(result->cursor->begin());
 	result->end = make_uniq<mongocxx::cursor::iterator>(result->cursor->end());
 
@@ -720,6 +738,14 @@ void MongoScanFunction(ClientContext &context, TableFunctionInput &data_p, DataC
 
 	if (state.current && state.end && *state.current == *state.end) {
 		state.finished = true;
+
+		// Capture operationTime from the session into per-connection state
+		if (state.session) {
+			auto op_time = state.session->operation_time();
+			auto op_state =
+			    context.registered_state->GetOrCreate<MongoOperationState>(MongoOperationState::STATE_KEY);
+			op_state->SetOperationTime(op_time.timestamp, op_time.increment);
+		}
 	}
 }
 
