@@ -37,9 +37,25 @@ SELECT current_setting('mongo_read_preference') = '';
 true
 
 # @spec RP-SET-002
-# snake_case should also work
+# snake_case should work
 statement ok
 SET mongo_read_preference = 'secondary_preferred';
+
+statement ok
+RESET mongo_read_preference;
+
+# @spec RP-SET-002
+# Multiple SETs — last write wins
+statement ok
+SET mongo_read_preference = 'primary';
+
+statement ok
+SET mongo_read_preference = 'nearest';
+
+query I
+SELECT current_setting('mongo_read_preference');
+----
+nearest
 
 statement ok
 RESET mongo_read_preference;
@@ -50,8 +66,8 @@ require-env MONGODB_TEST_DATABASE_AVAILABLE
 statement ok
 ATTACH 'host=localhost port=27017 dbname=duckdb_mongo_test' AS mongo_test (TYPE MONGO);
 
-# @spec RP-PARAM-001
-# Named parameter with 'primary' should work (default behavior)
+# @spec RP-PARAM-001, RP-PARAM-002
+# Test all valid read preference values as named parameter
 query I
 SELECT COUNT(*) >= 1 FROM mongo_scan(
     'mongodb://localhost:27017',
@@ -62,8 +78,6 @@ SELECT COUNT(*) >= 1 FROM mongo_scan(
 ----
 true
 
-# @spec RP-PARAM-002
-# camelCase values should work
 query I
 SELECT COUNT(*) >= 1 FROM mongo_scan(
     'mongodb://localhost:27017',
@@ -74,8 +88,6 @@ SELECT COUNT(*) >= 1 FROM mongo_scan(
 ----
 true
 
-# @spec RP-PARAM-002
-# snake_case values should work
 query I
 SELECT COUNT(*) >= 1 FROM mongo_scan(
     'mongodb://localhost:27017',
@@ -86,14 +98,64 @@ SELECT COUNT(*) >= 1 FROM mongo_scan(
 ----
 true
 
-# @spec RP-PARAM-002
-# nearest should work
+query I
+SELECT COUNT(*) >= 1 FROM mongo_scan(
+    'mongodb://localhost:27017',
+    'duckdb_mongo_test',
+    'users',
+    read_preference := 'secondaryPreferred'
+);
+----
+true
+
+query I
+SELECT COUNT(*) >= 1 FROM mongo_scan(
+    'mongodb://localhost:27017',
+    'duckdb_mongo_test',
+    'users',
+    read_preference := 'secondary_preferred'
+);
+----
+true
+
 query I
 SELECT COUNT(*) >= 1 FROM mongo_scan(
     'mongodb://localhost:27017',
     'duckdb_mongo_test',
     'users',
     read_preference := 'nearest'
+);
+----
+true
+
+# @spec RP-PARAM-002
+# Case insensitivity
+query I
+SELECT COUNT(*) >= 1 FROM mongo_scan(
+    'mongodb://localhost:27017',
+    'duckdb_mongo_test',
+    'users',
+    read_preference := 'PRIMARY'
+);
+----
+true
+
+query I
+SELECT COUNT(*) >= 1 FROM mongo_scan(
+    'mongodb://localhost:27017',
+    'duckdb_mongo_test',
+    'users',
+    read_preference := 'SECONDARYPREFERRED'
+);
+----
+true
+
+query I
+SELECT COUNT(*) >= 1 FROM mongo_scan(
+    'mongodb://localhost:27017',
+    'duckdb_mongo_test',
+    'users',
+    read_preference := 'Nearest'
 );
 ----
 true
@@ -122,10 +184,20 @@ SELECT COUNT(*) FROM mongo_scan(
 ----
 read_preference
 
+statement error
+SELECT COUNT(*) FROM mongo_scan(
+    'mongodb://localhost:27017',
+    'duckdb_mongo_test',
+    'users',
+    read_preference := 'replset'
+);
+----
+read_preference
+
 # @spec RP-ATTACH-001
 # Session setting should apply to ATTACH queries
 statement ok
-SET mongo_read_preference = 'primary';
+SET mongo_read_preference = 'primaryPreferred';
 
 query I
 SELECT COUNT(*) >= 1 FROM mongo_test.users;
@@ -135,6 +207,32 @@ true
 statement ok
 RESET mongo_read_preference;
 
+# @spec RP-PREC-001
+# Named parameter should override session setting
+# SET to 'primary', but use 'nearest' in named param — should not error
+statement ok
+SET mongo_read_preference = 'primary';
+
+query I
+SELECT COUNT(*) >= 1 FROM mongo_scan(
+    'mongodb://localhost:27017',
+    'duckdb_mongo_test',
+    'users',
+    read_preference := 'nearest'
+);
+----
+true
+
+statement ok
+RESET mongo_read_preference;
+
+# @spec RP-PREC-003
+# After RESET, no read preference override (uses connection default)
+query I
+SELECT COUNT(*) >= 1 FROM mongo_test.users;
+----
+true
+
 # @spec RP-COMPOSE-001
 # Combined with after_cluster_time should work
 query I
@@ -142,11 +240,29 @@ SELECT COUNT(*) >= 1 FROM mongo_scan(
     'mongodb://localhost:27017',
     'duckdb_mongo_test',
     'users',
-    read_preference := 'primary',
+    read_preference := 'primaryPreferred',
     after_cluster_time := '0:0'
 );
 ----
 true
+
+# Both SET at session level
+statement ok
+SET mongo_read_preference = 'nearest';
+
+statement ok
+SET mongo_after_cluster_time = '0:0';
+
+query I
+SELECT COUNT(*) >= 1 FROM mongo_test.users;
+----
+true
+
+statement ok
+RESET mongo_read_preference;
+
+statement ok
+RESET mongo_after_cluster_time;
 
 statement ok
 DETACH mongo_test;
