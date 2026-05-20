@@ -129,6 +129,18 @@ unique_ptr<FunctionData> MongoScanBind(ClientContext &context, TableFunctionBind
 		    ParseAfterClusterTime(input.named_parameters["after_cluster_time"].GetValue<string>());
 	}
 
+	// @spec RP-PARAM-001, RP-PARAM-002
+	// Parse read_preference parameter
+	if (input.named_parameters.find("read_preference") != input.named_parameters.end()) {
+		auto rp_str = input.named_parameters["read_preference"].GetValue<string>();
+		if (!rp_str.empty()) {
+			// Validate eagerly in bind so bad values fail fast
+			mongocxx::read_preference::read_mode mode;
+			ParseReadPreference(rp_str, mode);
+			result->read_preference_str = rp_str;
+		}
+	}
+
 	// Ensure MongoDB instance is initialized
 	GetMongoInstance();
 
@@ -361,6 +373,34 @@ unique_ptr<LocalTableFunctionState> MongoScanInitLocal(ExecutionContext &context
 		result->session->advance_operation_time(cluster_ts);
 	}
 
+	// @spec RP-PREC-001, RP-PREC-002, RP-PREC-003
+	// Resolve effective read preference: named parameter overrides session setting.
+	mongocxx::read_preference effective_read_pref;
+	bool has_read_pref = false;
+	if (!data.read_preference_str.empty()) {
+		mongocxx::read_preference::read_mode mode;
+		ParseReadPreference(data.read_preference_str, mode);
+		effective_read_pref.mode(mode);
+		has_read_pref = true;
+	}
+	if (!has_read_pref) {
+		try {
+			Value setting_val;
+			if (context.client.TryGetCurrentSetting("mongo_read_preference", setting_val)) {
+				auto setting_str = setting_val.ToString();
+				if (!setting_str.empty()) {
+					mongocxx::read_preference::read_mode mode;
+					if (ParseReadPreference(setting_str, mode)) {
+						effective_read_pref.mode(mode);
+						has_read_pref = true;
+					}
+				}
+			}
+		} catch (...) {
+			// Setting not available or not parseable — ignore
+		}
+	}
+
 	// Get collection
 	auto db = result->connection->client[result->database_name];
 	auto collection = db[result->collection_name];
@@ -404,6 +444,10 @@ unique_ptr<LocalTableFunctionState> MongoScanInitLocal(ExecutionContext &context
 		}
 
 		mongocxx::options::aggregate agg_opts;
+		// @spec RP-PARAM-001
+		if (has_read_pref) {
+			agg_opts.read_preference(effective_read_pref);
+		}
 		if (result->session) {
 			result->cursor = make_uniq<mongocxx::cursor>(collection.aggregate(*result->session, pipeline, agg_opts));
 		} else {
@@ -576,6 +620,10 @@ unique_ptr<LocalTableFunctionState> MongoScanInitLocal(ExecutionContext &context
 
 	// Build MongoDB find options
 	mongocxx::options::find opts;
+	// @spec RP-PARAM-001
+	if (has_read_pref) {
+		opts.read_preference(effective_read_pref);
+	}
 
 	// When schema enforcement is needed, ensure ALL schema columns are fetched from MongoDB
 	// so validation can check all columns, not just the ones DuckDB requested

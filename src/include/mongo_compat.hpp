@@ -7,7 +7,9 @@
 // @spec DRVCOMPAT-COMPAT-003
 
 #include "duckdb/common/types/vector.hpp"
+#include "duckdb/common/string_util.hpp"
 #include "duckdb/planner/table_filter.hpp"
+#include <mongocxx/read_preference.hpp>
 
 // FlatVector was moved to a separate header on DuckDB main.
 #if __has_include("duckdb/common/vector/flat_vector.hpp")
@@ -164,6 +166,34 @@ inline uint64_t ParseAfterClusterTime(const string &input) {
 		throw InvalidInputException(
 		    "after_cluster_time '%s': expected a UBIGINT or 'seconds:increment' format", input);
 	}
+}
+
+// --- Read preference parsing utility ---
+// @spec RP-PARAM-002, RP-PARAM-003, RP-PARAM-004
+// Parses a read preference string (case-insensitive, camelCase or snake_case).
+// Returns true and sets mode if valid, returns false for empty input.
+// Throws InvalidInputException on unrecognized values.
+inline bool ParseReadPreference(const string &input, mongocxx::read_preference::read_mode &mode) {
+	if (input.empty()) {
+		return false;
+	}
+	auto lower = StringUtil::Lower(input);
+	if (lower == "primary") {
+		mode = mongocxx::read_preference::read_mode::k_primary;
+	} else if (lower == "primarypreferred" || lower == "primary_preferred") {
+		mode = mongocxx::read_preference::read_mode::k_primary_preferred;
+	} else if (lower == "secondary") {
+		mode = mongocxx::read_preference::read_mode::k_secondary;
+	} else if (lower == "secondarypreferred" || lower == "secondary_preferred") {
+		mode = mongocxx::read_preference::read_mode::k_secondary_preferred;
+	} else if (lower == "nearest") {
+		mode = mongocxx::read_preference::read_mode::k_nearest;
+	} else {
+		throw InvalidInputException(
+		    "read_preference '%s': expected one of: primary, primaryPreferred, secondary, secondaryPreferred, nearest",
+		    input);
+	}
+	return true;
 }
 
 } // namespace duckdb

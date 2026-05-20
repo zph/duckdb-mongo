@@ -1,0 +1,152 @@
+# name: test/sql/query/read_preference.test
+# description: Test read preference parameter and session setting
+# group: [query]
+
+require mongo
+
+# @spec RP-SET-004
+# Setting should be visible in duckdb_settings
+query I
+SELECT COUNT(*) FROM duckdb_settings() WHERE name = 'mongo_read_preference';
+----
+1
+
+# @spec RP-SET-001
+# Default value should be empty string
+query I
+SELECT current_setting('mongo_read_preference') = '';
+----
+true
+
+# @spec RP-SET-002, RP-SET-003
+# SET and RESET should work
+statement ok
+SET mongo_read_preference = 'secondaryPreferred';
+
+query I
+SELECT current_setting('mongo_read_preference');
+----
+secondaryPreferred
+
+statement ok
+RESET mongo_read_preference;
+
+query I
+SELECT current_setting('mongo_read_preference') = '';
+----
+true
+
+# @spec RP-SET-002
+# snake_case should also work
+statement ok
+SET mongo_read_preference = 'secondary_preferred';
+
+statement ok
+RESET mongo_read_preference;
+
+# Test with actual MongoDB (requires test database)
+require-env MONGODB_TEST_DATABASE_AVAILABLE
+
+statement ok
+ATTACH 'host=localhost port=27017 dbname=duckdb_mongo_test' AS mongo_test (TYPE MONGO);
+
+# @spec RP-PARAM-001
+# Named parameter with 'primary' should work (default behavior)
+query I
+SELECT COUNT(*) >= 1 FROM mongo_scan(
+    'mongodb://localhost:27017',
+    'duckdb_mongo_test',
+    'users',
+    read_preference := 'primary'
+);
+----
+true
+
+# @spec RP-PARAM-002
+# camelCase values should work
+query I
+SELECT COUNT(*) >= 1 FROM mongo_scan(
+    'mongodb://localhost:27017',
+    'duckdb_mongo_test',
+    'users',
+    read_preference := 'primaryPreferred'
+);
+----
+true
+
+# @spec RP-PARAM-002
+# snake_case values should work
+query I
+SELECT COUNT(*) >= 1 FROM mongo_scan(
+    'mongodb://localhost:27017',
+    'duckdb_mongo_test',
+    'users',
+    read_preference := 'primary_preferred'
+);
+----
+true
+
+# @spec RP-PARAM-002
+# nearest should work
+query I
+SELECT COUNT(*) >= 1 FROM mongo_scan(
+    'mongodb://localhost:27017',
+    'duckdb_mongo_test',
+    'users',
+    read_preference := 'nearest'
+);
+----
+true
+
+# @spec RP-PARAM-004
+# Empty string means use default
+query I
+SELECT COUNT(*) >= 1 FROM mongo_scan(
+    'mongodb://localhost:27017',
+    'duckdb_mongo_test',
+    'users',
+    read_preference := ''
+);
+----
+true
+
+# @spec RP-PARAM-003
+# Invalid value should raise error
+statement error
+SELECT COUNT(*) FROM mongo_scan(
+    'mongodb://localhost:27017',
+    'duckdb_mongo_test',
+    'users',
+    read_preference := 'invalid_mode'
+);
+----
+read_preference
+
+# @spec RP-ATTACH-001
+# Session setting should apply to ATTACH queries
+statement ok
+SET mongo_read_preference = 'primary';
+
+query I
+SELECT COUNT(*) >= 1 FROM mongo_test.users;
+----
+true
+
+statement ok
+RESET mongo_read_preference;
+
+# @spec RP-COMPOSE-001
+# Combined with after_cluster_time should work
+query I
+SELECT COUNT(*) >= 1 FROM mongo_scan(
+    'mongodb://localhost:27017',
+    'duckdb_mongo_test',
+    'users',
+    read_preference := 'primary',
+    after_cluster_time := '0:0'
+);
+----
+true
+
+statement ok
+DETACH mongo_test;

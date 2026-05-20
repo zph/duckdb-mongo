@@ -136,3 +136,44 @@ Named parameter > session SET > none. Empty/0 means disabled.
 | `src/include/mongo_table_function.hpp` | `MongoScanData.after_cluster_time` field |
 | `src/mongo_table_function.cpp` | Reads parameter/setting in bind, applies via `session.advance_operation_time()` in init |
 | `test/sql/query/after_cluster_time.test` | Tests for SET/RESET, named parameter, error handling, ATTACH integration |
+
+---
+
+## Read Preference
+
+### Overview
+
+Per-query or per-session control over which replica set members serve reads, following the same layered pattern as afterClusterTime.
+
+### Two Mechanisms
+
+**1. Named parameter on `mongo_scan`**:
+```sql
+SELECT * FROM mongo_scan('mongodb://...', 'mydb', 'collection',
+    read_preference := 'secondaryPreferred');
+```
+
+**2. Session-level SET**:
+```sql
+SET mongo_read_preference = 'secondaryPreferred';
+SELECT * FROM mongo_test.users;
+RESET mongo_read_preference;
+```
+
+### Accepted Values
+
+`primary`, `primaryPreferred` / `primary_preferred`, `secondary`, `secondaryPreferred` / `secondary_preferred`, `nearest`. Case-insensitive.
+
+### Precedence
+
+Named parameter > session SET > connection string `?readPreference=` > `primary` (default).
+
+### Key Files
+
+| File | Role |
+|------|------|
+| `src/include/mongo_compat.hpp` | `ParseReadPreference()` — validates and maps string to `mongocxx::read_preference::read_mode` |
+| `src/mongo_extension.cpp` | Registers `read_preference` named parameter and `mongo_read_preference` session setting |
+| `src/include/mongo_table_function.hpp` | `MongoScanData.read_preference_str` field |
+| `src/mongo_table_function.cpp` | Reads parameter/setting, applies to `find_options` and `aggregate_options` |
+| `test/sql/query/read_preference.test` | Tests for all values, SET/RESET, error handling, composition with afterClusterTime |

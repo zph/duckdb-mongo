@@ -62,6 +62,10 @@ struct MongoScanData : public TableFunctionData {
 	// afterClusterTime for causal consistency reads (0 = disabled)
 	uint64_t after_cluster_time = 0;
 
+	// @spec RP-PARAM-001
+	// Read preference override (empty = use connection default)
+	std::string read_preference_str;
+
 	MongoScanData()
 	    : sample_size(100), schema_mode(SchemaMode::PERMISSIVE), has_explicit_schema(false),
 	      complex_filter_expr(bsoncxx::builder::basic::document {}.extract()), after_cluster_time(0) {

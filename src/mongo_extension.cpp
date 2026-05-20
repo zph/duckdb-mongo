@@ -47,6 +47,8 @@ static void LoadInternal(ExtensionLoader &loader) {
 	mongo_scan.named_parameters["schema_mode"] = LogicalType::VARCHAR;
 	// @spec ACT-PARAM-001
 	mongo_scan.named_parameters["after_cluster_time"] = LogicalType::VARCHAR;
+	// @spec RP-PARAM-001
+	mongo_scan.named_parameters["read_preference"] = LogicalType::VARCHAR;
 
 	// Enable filter pushdown
 	mongo_scan.filter_pushdown = true;
@@ -203,6 +205,14 @@ static void LoadInternal(ExtensionLoader &loader) {
 	                          "Accepts UBIGINT or 'seconds:increment' format. "
 	                          "This is NOT time travel — reads return current data that reflects "
 	                          "all operations up to the given timestamp.",
+	                          LogicalType::VARCHAR, Value(""));
+
+	// @spec RP-SET-001
+	// Register session-level setting for read preference.
+	// Accepts: primary, primaryPreferred, secondary, secondaryPreferred, nearest. Empty = use connection default.
+	config.AddExtensionOption("mongo_read_preference",
+	                          "MongoDB read preference for replica set/sharded reads. "
+	                          "Accepts: primary, primaryPreferred, secondary, secondaryPreferred, nearest.",
 	                          LogicalType::VARCHAR, Value(""));
 
 	// Register optimizer extension (runs after DuckDB built-in optimizers)
