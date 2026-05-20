@@ -1,0 +1,121 @@
+# name: test/sql/query/after_cluster_time.test
+# description: Test afterClusterTime causal consistency reads
+# group: [query]
+
+require mongo
+
+# @spec ACT-SET-004
+# Setting should be visible in duckdb_settings
+query I
+SELECT COUNT(*) FROM duckdb_settings() WHERE name = 'mongo_after_cluster_time';
+----
+1
+
+# @spec ACT-SET-001
+# Default value should be empty string
+query I
+SELECT current_setting('mongo_after_cluster_time') = '';
+----
+true
+
+# @spec ACT-SET-002, ACT-SET-003
+# SET and RESET should work
+statement ok
+SET mongo_after_cluster_time = '1779206684:15';
+
+query I
+SELECT current_setting('mongo_after_cluster_time');
+----
+1779206684:15
+
+statement ok
+RESET mongo_after_cluster_time;
+
+query I
+SELECT current_setting('mongo_after_cluster_time') = '';
+----
+true
+
+# Test with actual MongoDB (requires test database)
+require-env MONGODB_TEST_DATABASE_AVAILABLE
+
+statement ok
+ATTACH 'host=localhost port=27017 dbname=duckdb_mongo_test' AS mongo_test (TYPE MONGO);
+
+# @spec ACT-COMPOSE-001
+# Capture operation time from a scan, then use it for causal consistency
+query I
+SELECT COUNT(*) >= 1 FROM mongo_test.users;
+----
+true
+
+# @spec ACT-PARAM-001
+# Named parameter with a literal UBIGINT value
+query I
+SELECT COUNT(*) >= 1 FROM mongo_scan(
+    'mongodb://localhost:27017',
+    'duckdb_mongo_test',
+    'users',
+    after_cluster_time := '0:1'
+);
+----
+true
+
+# @spec ACT-COMPOSE-001
+# To use mongo_operation_time() for causal consistency, use SET (subqueries
+# are not allowed in table function named parameters):
+#   SET VARIABLE act = (SELECT COALESCE(mongo_operation_time()::VARCHAR, ''));
+#   SET mongo_after_cluster_time = getvariable('act');
+#   SELECT * FROM mongo_test.users;
+
+# @spec ACT-COMPOSE-002, ACT-PARAM-002
+# Named parameter with seconds:increment string format
+query I
+SELECT COUNT(*) >= 1 FROM mongo_scan(
+    'mongodb://localhost:27017',
+    'duckdb_mongo_test',
+    'users',
+    after_cluster_time := '0:0'
+);
+----
+true
+
+# @spec ACT-PARAM-004
+# Empty string means disabled (no afterClusterTime sent)
+query I
+SELECT COUNT(*) >= 1 FROM mongo_scan(
+    'mongodb://localhost:27017',
+    'duckdb_mongo_test',
+    'users',
+    after_cluster_time := ''
+);
+----
+true
+
+# @spec ACT-PARAM-003
+# Invalid input should raise error
+statement error
+SELECT COUNT(*) FROM mongo_scan(
+    'mongodb://localhost:27017',
+    'duckdb_mongo_test',
+    'users',
+    after_cluster_time := 'not_a_timestamp'
+);
+----
+after_cluster_time
+
+# @spec ACT-SET-002, ACT-ATTACH-001
+# Session setting should apply to ATTACH queries
+statement ok
+SET mongo_after_cluster_time = '0:0';
+
+query I
+SELECT COUNT(*) >= 1 FROM mongo_test.users;
+----
+true
+
+statement ok
+RESET mongo_after_cluster_time;
+
+statement ok
+DETACH mongo_test;

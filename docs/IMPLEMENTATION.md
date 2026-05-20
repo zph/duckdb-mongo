@@ -91,3 +91,48 @@ mongo_operation_increment() → extracts lower 32 bits
 - **Session fallback for standalone servers**: `start_session()` is wrapped in try-catch. On standalone MongoDB (which doesn't support sessions), the session is null and find/aggregate proceed without it. Operation time functions remain NULL.
 - **Zero operationTime treated as absent**: Standalone servers return `{0, 0}` for operation_time even when sessions work. `SetOperationTime` ignores zero values to keep functions returning NULL rather than epoch-zero.
 - **`mongocxx::client_session`**: Used instead of raw command inspection because the C++ driver's session API natively tracks `operationTime` across all operations routed through it.
+
+---
+
+## Causal Consistency Reads (afterClusterTime)
+
+### Overview
+
+Allows users to pass a MongoDB cluster timestamp to subsequent reads, guaranteeing the read sees all effects of operations up to that point. This is **causal consistency, NOT time travel** — the read returns current data, not a historical snapshot.
+
+### Two Mechanisms
+
+**1. Named parameter on `mongo_scan`** (explicit, per-call):
+```sql
+SELECT * FROM mongo_scan('mongodb://...', 'mydb', 'collection',
+    after_cluster_time := '1779206684:15');
+```
+
+**2. Session-level SET** (implicit, works with ATTACH):
+```sql
+SET mongo_after_cluster_time = '1779206684:15';
+SELECT * FROM mongo_test.users;  -- afterClusterTime applied
+RESET mongo_after_cluster_time;
+```
+
+### Input Formats
+
+Both accept UBIGINT-as-string (`'7641659143652114433'`) or `seconds:increment` format (`'1779206684:15'`).
+
+### How It Works
+
+The resolved `afterClusterTime` is applied via `session.advance_operation_time(bsoncxx::types::b_timestamp{...})`. The causally consistent session automatically includes `afterClusterTime` in subsequent `find()` and `aggregate()` read commands. MongoDB blocks the read until the cluster has advanced past this timestamp.
+
+### Precedence
+
+Named parameter > session SET > none. Empty/0 means disabled.
+
+### Key Files
+
+| File | Role |
+|------|------|
+| `src/include/mongo_compat.hpp` | `ParseAfterClusterTime()` — parses both input formats |
+| `src/mongo_extension.cpp` | Registers `after_cluster_time` named parameter and `mongo_after_cluster_time` session setting |
+| `src/include/mongo_table_function.hpp` | `MongoScanData.after_cluster_time` field |
+| `src/mongo_table_function.cpp` | Reads parameter/setting in bind, applies via `session.advance_operation_time()` in init |
+| `test/sql/query/after_cluster_time.test` | Tests for SET/RESET, named parameter, error handling, ATTACH integration |

@@ -58,9 +58,13 @@ struct MongoScanData : public TableFunctionData {
 	// Complex filter pushdown: MongoDB $expr queries for complex expressions
 	bsoncxx::document::value complex_filter_expr;
 
+	// @spec ACT-PARAM-001
+	// afterClusterTime for causal consistency reads (0 = disabled)
+	uint64_t after_cluster_time = 0;
+
 	MongoScanData()
 	    : sample_size(100), schema_mode(SchemaMode::PERMISSIVE), has_explicit_schema(false),
-	      complex_filter_expr(bsoncxx::builder::basic::document {}.extract()) {
+	      complex_filter_expr(bsoncxx::builder::basic::document {}.extract()), after_cluster_time(0) {
 	}
 };
 

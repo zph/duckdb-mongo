@@ -129,6 +129,43 @@ inline const Expression &MongoComparisonRight(const Expression &expr) {
 #define MONGO_EXPR_TYPE(expr)        ((expr).GetExpressionType())
 #endif
 
+// --- afterClusterTime parsing utility ---
+// @spec ACT-PARAM-002, ACT-PARAM-003, ACT-PARAM-004
+// Parses a cluster time value from either:
+//   - UBIGINT-as-string: "7641659143652114433"
+//   - seconds:increment format: "1779206684:15"
+// Returns 0 for empty/NULL input (meaning disabled).
+// Throws InvalidInputException on malformed input.
+inline uint64_t ParseAfterClusterTime(const string &input) {
+	if (input.empty()) {
+		return 0;
+	}
+	auto colon_pos = input.find(':');
+	if (colon_pos != string::npos) {
+		// seconds:increment format
+		try {
+			uint64_t seconds = std::stoull(input.substr(0, colon_pos));
+			uint64_t increment = std::stoull(input.substr(colon_pos + 1));
+			if (seconds > UINT32_MAX || increment > UINT32_MAX) {
+				throw InvalidInputException("after_cluster_time '%s': seconds and increment must fit in 32 bits", input);
+			}
+			return (seconds << 32) | increment;
+		} catch (const InvalidInputException &) {
+			throw;
+		} catch (...) {
+			throw InvalidInputException(
+			    "after_cluster_time '%s': expected 'seconds:increment' format (e.g., '1779206684:15')", input);
+		}
+	}
+	// Plain UBIGINT string
+	try {
+		return std::stoull(input);
+	} catch (...) {
+		throw InvalidInputException(
+		    "after_cluster_time '%s': expected a UBIGINT or 'seconds:increment' format", input);
+	}
+}
+
 } // namespace duckdb
 
 // --- MongoDB driver compatibility (mongocxx 4.x vs 3.x) ---

@@ -45,6 +45,8 @@ static void LoadInternal(ExtensionLoader &loader) {
 	mongo_scan.named_parameters["columns"] = LogicalType::ANY;
 	mongo_scan.named_parameters["pipeline"] = LogicalType::VARCHAR;
 	mongo_scan.named_parameters["schema_mode"] = LogicalType::VARCHAR;
+	// @spec ACT-PARAM-001
+	mongo_scan.named_parameters["after_cluster_time"] = LogicalType::VARCHAR;
 
 	// Enable filter pushdown
 	mongo_scan.filter_pushdown = true;
@@ -192,6 +194,16 @@ static void LoadInternal(ExtensionLoader &loader) {
 #else
 	config.storage_extensions["mongo"] = MongoStorageExtension::Create();
 #endif
+
+	// @spec ACT-SET-001
+	// Register session-level setting for afterClusterTime (causal consistency reads).
+	// Accepts UBIGINT-as-string or "seconds:increment" format. Empty = disabled.
+	config.AddExtensionOption("mongo_after_cluster_time",
+	                          "MongoDB cluster timestamp for causal consistency reads. "
+	                          "Accepts UBIGINT or 'seconds:increment' format. "
+	                          "This is NOT time travel — reads return current data that reflects "
+	                          "all operations up to the given timestamp.",
+	                          LogicalType::VARCHAR, Value(""));
 
 	// Register optimizer extension (runs after DuckDB built-in optimizers)
 	OptimizerExtension opt_ext;

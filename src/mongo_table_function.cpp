@@ -122,6 +122,13 @@ unique_ptr<FunctionData> MongoScanBind(ClientContext &context, TableFunctionBind
 		result->schema_mode = ParseSchemaMode(input.named_parameters["schema_mode"].GetValue<string>());
 	}
 
+	// @spec ACT-PARAM-001, ACT-PARAM-002
+	// Parse after_cluster_time parameter for causal consistency reads
+	if (input.named_parameters.find("after_cluster_time") != input.named_parameters.end()) {
+		result->after_cluster_time =
+		    ParseAfterClusterTime(input.named_parameters["after_cluster_time"].GetValue<string>());
+	}
+
 	// Ensure MongoDB instance is initialized
 	GetMongoInstance();
 
@@ -324,6 +331,34 @@ unique_ptr<LocalTableFunctionState> MongoScanInitLocal(ExecutionContext &context
 	} catch (...) {
 		// Session not supported — operationTime tracking will be unavailable.
 		result->session = nullptr;
+	}
+
+	// @spec ACT-PREC-001, ACT-PREC-002, ACT-PREC-003
+	// Resolve effective afterClusterTime: named parameter overrides session setting.
+	uint64_t effective_after_cluster_time = data.after_cluster_time;
+	if (effective_after_cluster_time == 0) {
+		// Fall back to session-level setting
+		try {
+			Value setting_val;
+			if (context.client.TryGetCurrentSetting("mongo_after_cluster_time", setting_val)) {
+				auto setting_str = setting_val.ToString();
+				if (!setting_str.empty()) {
+					effective_after_cluster_time = ParseAfterClusterTime(setting_str);
+				}
+			}
+		} catch (...) {
+			// Setting not available or not parseable — ignore
+		}
+	}
+
+	// Apply afterClusterTime via session.advance_operation_time().
+	// The session automatically includes afterClusterTime in subsequent read commands,
+	// which tells MongoDB to block until the cluster has advanced past this timestamp.
+	if (effective_after_cluster_time != 0 && result->session) {
+		uint32_t ts_seconds = static_cast<uint32_t>(effective_after_cluster_time >> 32);
+		uint32_t ts_increment = static_cast<uint32_t>(effective_after_cluster_time & 0xFFFFFFFF);
+		bsoncxx::types::b_timestamp cluster_ts {ts_seconds, ts_increment};
+		result->session->advance_operation_time(cluster_ts);
 	}
 
 	// Get collection
