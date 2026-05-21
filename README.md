@@ -621,6 +621,75 @@ SELECT mongo_operation_time() >= (SELECT ts FROM checkpoint) AS moved_forward;
 > connections each track their own value. The value reflects the *last completed* `mongo_scan` on
 > that connection.
 
+### Causal Consistency (afterClusterTime)
+
+Pass a captured `operationTime` to a subsequent read to guarantee it sees all prior operations. This is **causal consistency, NOT time travel** — the read returns current data, but waits until the cluster has advanced past the given timestamp.
+
+> **Important:** `afterClusterTime` only has effect on replica sets and sharded clusters.
+> On standalone MongoDB, the setting is silently ignored.
+
+**Two ways to use it:**
+
+**1. Named parameter on `mongo_scan`** (per-query):
+```sql
+SELECT * FROM mongo_scan('mongodb://...', 'mydb', 'orders',
+    after_cluster_time := '1779206684:15');
+```
+
+**2. Session setting** (applies to all queries including ATTACH):
+```sql
+-- Capture the timestamp from a prior read
+SET VARIABLE act = (SELECT COALESCE(mongo_operation_time()::VARCHAR, ''));
+SET mongo_after_cluster_time = getvariable('act');
+
+-- All subsequent reads wait for the cluster to catch up
+SELECT * FROM mongo_test.orders;
+
+-- Clear when done
+RESET mongo_after_cluster_time;
+```
+
+**Input formats:** Both accept a UBIGINT string (`'7641659143652114433'`) or `seconds:increment` format (`'1779206684:15'`). The `seconds:increment` format matches the `ts` column in the oplog.
+
+**Precedence:** Named parameter > session SET > none. Empty or `'0:0'` means disabled.
+
+### Read Preference
+
+Control which replica set members serve reads — route analytics queries to secondaries to reduce load on the primary.
+
+**1. Named parameter on `mongo_scan`** (per-query):
+```sql
+SELECT * FROM mongo_scan('mongodb://...', 'mydb', 'analytics',
+    read_preference := 'secondaryPreferred');
+```
+
+**2. Session setting** (applies to all queries including ATTACH):
+```sql
+SET mongo_read_preference = 'secondaryPreferred';
+SELECT * FROM mongo_test.large_collection;
+RESET mongo_read_preference;
+```
+
+**Accepted values** (case-insensitive, camelCase or snake_case):
+
+| Value | Behavior |
+|-------|----------|
+| `primary` | Reads from primary only (default) |
+| `primaryPreferred` | Primary; falls back to secondary |
+| `secondary` | Secondary only |
+| `secondaryPreferred` | Secondary; falls back to primary |
+| `nearest` | Lowest network latency |
+
+**Precedence:** Named parameter > session SET > connection string `?readPreference=` > `primary`.
+
+**Combining with afterClusterTime:**
+```sql
+-- Read from secondary, but only after it has replicated past our checkpoint
+SELECT * FROM mongo_scan('mongodb://...', 'mydb', 'orders',
+    read_preference := 'secondaryPreferred',
+    after_cluster_time := '1779206684:15');
+```
+
 ### Limitations
 
 - Read-only
